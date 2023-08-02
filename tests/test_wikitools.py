@@ -1,1 +1,1 @@
-from wikitools import wikitools
+from wikitools import tools
