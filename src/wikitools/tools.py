@@ -38,7 +38,28 @@ def chunks(l, n):
         # Create an index range for l of n items:
         yield l[i:i+n]
 
+def process_articles(titles=None, pageids=None, norm_map=None, titles_redirect_map=None, pageids_redirect_map=None):
+    if not ((titles is not None) ^ (pageids is not None)):
+        raise ValueError('Must specify exactly one of titles or pageids')
+    elif (not titles)&(not pageids):
+        return []
 
+    if titles:
+        items = titles
+        redirect_map = titles_redirect_map
+    else:
+        items = pageids
+        redirect_map = pageids_redirect_map
+
+    if (type(items) == str)|(type(items) == int):
+        items = [items]
+
+    if titles:
+        items = [norm_map.get(a, a) for a in items]
+    items = [redirect_map.get(a, a) for a in items]
+    items = list(dict.fromkeys([a for a in items if a]))
+
+    return items
 
 
 # def wiki_details(row):

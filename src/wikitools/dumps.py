@@ -2,10 +2,12 @@ import requests
 import time
 import io
 import gzip
+import bz2
 import os
 import datetime
 import glob
 import pandas as pd
+import polars as pl
 from scipy import stats
 from wikitools.tools import round_sig
 from wikitools.api import fix_redirects
@@ -78,7 +80,10 @@ def import_table(compressed_file, columns):
     # print('Reading df')
     if not compressed_file:
         return pd.DataFrame(columns=columns)
-    txt = gzip.GzipFile(fileobj=compressed_file)
+    try:
+        txt = gzip.GzipFile(fileobj=compressed_file)
+    except:
+        txt = bz2.BZ2File(compressed_file)
 
     try:
         df = pd.read_table(txt, names=columns, quoting=3,
@@ -153,6 +158,7 @@ def download_clickstream_months(lang, months, data_path, headers):
     """
 
     months_got = glob.glob('%s/clickstream-%swiki*.tsv.gz' %(data_path, lang))
+    months_got = [m.split('wiki-')[-1].split('.')[0] for m in months_got]
     months = sorted(set(months) - set(months_got))
     
     # pv_space_estimate(hours, data_path)
@@ -187,7 +193,7 @@ def get_clickstream_month(lang, month, data_path, headers={}):
     else:
         filepath = None
     cols = ['source', 'target', 'type', 'n_%s' % month]
-    df = download_read_table(f_url, filepath, cols, None, headers)
+    df = download_read_table(f_url, filepath, cols, headers)
     return df
 
 def get_clickstreams(langcsartdict, redirects, data_path, csdf_path,
@@ -228,6 +234,7 @@ def get_clickstreams(langcsartdict, redirects, data_path, csdf_path,
         print('All files downloaded')
 
     l_redirects = {}
+    t0 = time.time()
     for lang, artdict in langcsartdict.items():
         if lang not in ['de', 'en', 'es', 'fa', 'fr', 'it', 'ja', 'pl', 'pt',
                         'ru', 'zh']:
@@ -235,8 +242,13 @@ def get_clickstreams(langcsartdict, redirects, data_path, csdf_path,
             continue
         redirects_r = {x: k for k, v in redirects[lang].items() for x in v}
         l_redirects[lang] = redirects_r.copy()
+        tl0 = time.time()
+        tr = tl0
         for month, arts in artdict.items():
             print(lang, month)
+            if 'n_%s' % month in cs_df_dict.get(lang, []):
+                print('Already got %s %s' % (lang, month))
+                continue
             df = get_clickstream_month(lang, month, data_path, **kwargs)
 
             df['n_%s' % month] = df['n_%s' % month].astype(float)
@@ -258,20 +270,19 @@ def get_clickstreams(langcsartdict, redirects, data_path, csdf_path,
                 raise
 
             # get all redirects
-            if agg_rd:
-                articles = set(df['source']) | set(df['target'])
-                l_redirects[lang] = fix_redirects(articles, l_redirects[lang],
-                                                  lang, norm_keys=False)
+            # if agg_rd:
+            #     articles = set(df['source']) | set(df['target'])
+            #     l_redirects[lang] = fix_redirects(articles, l_redirects[lang],
+            #                                       lang, norm_keys=False)
 
-                df['source'] = df['source'].apply(lambda x:
-                                                  l_redirects[lang].get(x, x))
-                df['target'] = df['target'].apply(lambda x:
-                                                  l_redirects[lang].get(x, x))
-                # sum redirects
+            #     df['source'] = df['source'].apply(lambda x:
+            #                                       l_redirects[lang].get(x, x))
+            #     df['target'] = df['target'].apply(lambda x:
+            #                                       l_redirects[lang].get(x, x))
 
-                df = df.groupby(['source', 'target',
-                                 'type']).sum().reset_index()
-
+            #     df = df.groupby(['source', 'target',
+            #                      'type']).sum().reset_index()
+            td = time.time()
             if lang not in cs_df_dict:
                 cs_df_dict[lang] = pd.DataFrame(
                     index=df.set_index(list(df.columns[:3])).index)
@@ -281,8 +292,21 @@ def get_clickstreams(langcsartdict, redirects, data_path, csdf_path,
                                                        )['n_%s' % month]],
                                          axis=1)
 
+            ts = time.time()
             if csdf_path:
                 cs_df_dict[lang].reset_index().to_hdf(csdf_path, key=lang)
+            
+            tb = time.time()
+            average = (tb-tl0)/(list(artdict.keys()).index(month)+1)
+            tl_remaining = average*(len(artdict)-list(artdict.keys()).index(month)+1)/3600
+
+            print('Month %s took %.2fs total, %.2fs to save, %.2fs to join data, %.2fs to process'
+                    % (month, tb-tr, tb-ts, ts-td, td-tr))
+            print('Total lang time elapsed: %.2fh' % ((tb-tl0)/3600))
+            print('Total time elapsed: %.2fh' % ((tb-t0)/3600))
+            print('Lang time remaining: %.2fh' % tl_remaining)
+            tr = time.time()
+
 
     return {k: v.reset_index() for k, v in cs_df_dict.items()}
 
@@ -391,11 +415,11 @@ def get_pageview_hour(hour, data_path, headers={}):
     else:
         filepath = None
     cols = ['domain', 'article', 'views', 'response']
-    df = download_read_table(f_url, filepath, cols, None, headers)
+    df = download_read_table(f_url, filepath, cols, headers)
     return df
 
 
-def get_datelangartdict(langartdict, redirects, days=False):
+def get_datelangartdict(langartdict, redirects, days=False, offset = {}):
     """Converts a dictionary of language-article-date ranges to a dictionary of
     date-language-article ranges.
 
@@ -404,23 +428,30 @@ def get_datelangartdict(langartdict, redirects, days=False):
         redirects (dict): Dictionary of redirects.
         days (bool, optional): Whether to get full days at the end of range.
         Defaults to False.
+        offset (dict, optional): Dictionary of time offset. Defaults to {}.
 
     Returns:
         dict: Dictionary of date-language-article ranges.
     """    
     alldatetimes = {}
     for lang, artdict in langartdict.items():
-        for art, daterange in artdict.items():
-            dr = langartdict[lang][art]
-            if days:
-                dr = (dr[0].floor('D'),
-                      dr[1].ceil('D') - datetime.timedelta(hours=1))
-            for d in pd.date_range(*dr, freq='H'):
-                if d not in alldatetimes:
-                    alldatetimes[d] = {}
-                if lang not in alldatetimes[d]:
-                    alldatetimes[d][lang] = {}
-                alldatetimes[d][lang][art] = redirects[lang][art]
+        for art, dateranges in artdict.items():
+            if offset:
+                dateranges2 += [(dr[0] + relativedelta(offset[lang]),
+                                 dr[1] + relativedelta(offset[lang]))
+                              for dr in dateranges]
+            for dr in dateranges2:
+                if days:
+                    dr = (dr[0].floor('D'),
+                        dr[1].ceil('D') - datetime.timedelta(hours=1))
+                for d in pd.date_range(*dr, freq='H'):
+                    if d not in alldatetimes:
+                        alldatetimes[d] = {}
+                    if lang not in alldatetimes[d]:
+                        alldatetimes[d][lang] = {}
+                    if art not in alldatetimes[d][lang]:
+                        alldatetimes[d][lang][art] = redirects[lang][art]
+
 
     return {k: alldatetimes[k] for k in sorted(alldatetimes.keys())}
 
@@ -453,8 +484,7 @@ def check_rows(hour, existing_df, langdict={}, langs=[]):
         out = {}
         for lang, arts in langdict.items():
             hdfl = hdf[(hdf['domain'] == lang) | (hdf['domain'] == lang+'.m')]
-            f_arts = {art: rds for art, rds in arts.items()
-                      if art not in hdfl['article'].values}
+            f_arts = arts - set(hdfl['article'].values)
             if f_arts:
                 out[lang] = f_arts
     else:
@@ -540,9 +570,9 @@ def filter_pv_df(lang, arts, df, hour, pop_zero=True, agg_rd=True,
         return qviews
 
 
-def get_hourly_pageviews(langartdict, redirects, data_path, pvdf_path, 
+def get_hourly_pageviews(datelangartdict, redirects, data_path, pvdf_path, 
                          agg_rd=True, agg_dm=True, dl_first=True,
-                         pop_zero=True,
+                         pop_zero=True, savemode='hdf', savekwargs={}, ret=False,
                          **kwargs):
     """Get the hourly pageview for a selection of languages/articles/hours.
 
@@ -560,13 +590,13 @@ def get_hourly_pageviews(langartdict, redirects, data_path, pvdf_path,
         _type_: DataFrame of pageviews for specified languages/articles/hours.
     """
 
-    if os.path.exists(pvdf_path):
+    if (savemode=='hdf') & (os.path.exists(pvdf_path)):
         existing_df = pd.read_hdf(pvdf_path, key='df')
     else:
         existing_df = pd.DataFrame()
 
     # reshape input
-    datelangartdict = get_datelangartdict(langartdict, redirects)
+    # datelangartdict = get_datelangartdict(langartdict, redirects)
 
     if pvdf_path:
         pd.Series({'save_df': bool(data_path), 'save_hpv': bool(pvdf_path),
@@ -578,30 +608,83 @@ def get_hourly_pageviews(langartdict, redirects, data_path, pvdf_path,
         download_pageview_hours(datelangartdict.keys(), data_path, **kwargs)
         print('All files downloaded')
 
+    t0 = time.time()
+    tl = t0
     for n, (hour, langdict) in enumerate(datelangartdict.items()):
+        print(hour)
         # print(time.time()-t0)
         print('Page views progress', round(100*n/len(datelangartdict), 4), '%')
         # filter down langdict
-        flangdict = check_rows(hour, existing_df, langdict=langdict)
+        if savemode=='sql':
+            ts = time.time()
+            try:
+                existing_df = pd.read_sql_query('SELECT * FROM pageviews WHERE hour="%s"' %hour.isoformat(sep=' '),
+                                                con=savekwargs['con'], parse_dates=['hour'], index_col='hour')
+            except:
+                existing_df = pd.DataFrame()
+            print('SQL read time (length %d):' %len(existing_df), time.time()-ts)
 
+        tc = time.time()
+        if (not agg_rd): #&(bool(redirects)):
+            rdlangdict = {k: [y for z in [redirects[k][x] for x in v]
+                                for y in z] for k, v in langdict.items()}
+            flangdict = check_rows(hour, existing_df, langdict=rdlangdict)
+        else:
+            flangdict = check_rows(hour, existing_df, langdict=langdict) 
         if not flangdict:
+            print('No new rows')
             continue
+        print('Check rows time:', time.time()-tc)
+
+        tg = time.time()
         df = get_pageview_hour(hour, data_path, **kwargs)
+        print('Get pageview hour time:', time.time()-tg)
 
         # get views for article(s) (desktop+mobile)
-        print('Filtering df')
+        tf = time.time()
+        edf = pd.DataFrame()
         for lang, arts in flangdict.items():
-            qviews = filter_pv_df(lang, arts, df, hour, pop_zero, agg_rd,
-                                  agg_dm)
-            existing_df = pd.concat([existing_df, qviews])
-            if existing_df['domain'].isnull().sum():
+            rdarts = {k: redirects[lang][k] for k in arts}
+            qviews = filter_pv_df(lang, rdarts, df, hour, pop_zero, agg_rd,
+                                    agg_dm)
+            edf = pd.concat([edf, qviews])
+            if edf['domain'].isnull().sum():
                 raise
+        print('Filter df time:', time.time()-tf)
 
-        existing_df = existing_df.sort_index()
+        tcc = time.time()
+        if ret | (bool(pvdf_path)&(savemode == 'hdf')):
+            existing_df = pd.concat([existing_df, edf])
+            existing_df = existing_df.sort_index()
+        print('Concat time:', time.time()-tcc)
+
         # save data
+        tsv = time.time()
         if pvdf_path:
-            os.rename(pvdf_path, pvdf_path.replace('.h5', '_old.h5'))
-            existing_df.to_hdf(pvdf_path, key='df')
+            if savemode == 'hdf':
+                if os.path.exists(pvdf_path):
+                    os.rename(pvdf_path, pvdf_path.replace('.h5', '_old.h5'))
+                existing_df.to_hdf(pvdf_path, key='df')
+            elif savemode == 'sql':
+                #edf???
+                edf.reset_index().rename({'index': 'hour'}, axis=1).to_sql('pageviews', con=savekwargs['con'],
+                            if_exists=savekwargs['if_exists'], index=False)
+            else:
+                raise ValueError('savemode must be "hdf" or "sql"')
+        print('Save time:', time.time()-tsv)
+
+        th = time.time() - tl
+        tl = time.time()
+        total = time.time()-t0
+        average = total/(n+1)
+        progress = round(100*n/len(datelangartdict), 2)
+        remaining1 = (len(datelangartdict)-n)*average/3600
+        remaining2 = (len(datelangartdict)-n)*th/3600
+        print('Progress %f%%, time %fh, average %.1fs, remaining 1 %fh, remaining 2 %fh'
+              %(progress, total/3600, average, remaining1, remaining2))
+
+    if bool(pvdf_path)&(savemode == 'hdf'):
+        os.remove(pvtdf_path.replace('.h5', '_old.h5'))
 
     return existing_df
 
@@ -668,6 +751,7 @@ def get_hourly_pageview_totals(daterange, langs, data_path, pvtdf_path,
             if os.path.exists(pvtdf_path):
                 os.rename(pvtdf_path, pvtdf_path.replace('.h5', '_old.h5'))
             existing_df.to_hdf(pvtdf_path, key='df')
+
 
     if pvtdf_path:
         os.remove(pvtdf_path.replace('.h5', '_old.h5'))
@@ -1060,3 +1144,248 @@ def get_all_pageview_data(langartdict, redirects, data_path, h_path, ht_path,
                  av*(len(datelangartdict)-n)/3600))
 
     return existing_df_dict
+
+#%% Page views (daily dumps)
+
+def find_file_lines(filepath):
+    """Find the first lines of the file that contains the first wikipedia pageview,
+    and the first line that contains the first wikipedia pageview with 6 columns.
+
+    This is used to adapt to polars erratic csv reading behavior.
+
+    Args:
+        filepath (str): Path to the file.
+
+    Returns:
+        tuple (int, int, list): Index of first wikipedia line, first wikipedia
+        line with 6 columns, list of dictionaries with the first wikipedia data
+        before 6 columns are found.
+    """
+
+    firstwikip = 0
+    needwk = True
+    data = []
+    for n, line in enumerate(open(filepath, 'r')):
+        if (n==0)&(line.split()[0]=='domain'):
+            continue
+        try:
+            wk = line.split('.')[1][:9] == 'wikipedia'
+        except IndexError:
+            continue        
+        l = len(line.split()) == 6
+
+        if wk & l:
+            firstwikip6 = n
+            if not firstwikip:
+                firstwikip = n
+            break
+        elif wk:      
+            data.append(dict(zip(['domain', 'page', 'source', 'daily', 'hourly'], line.split())))
+            if needwk:
+                needwk = False
+                firstwikip = n
+        
+    return firstwikip, firstwikip6, data
+
+def read_pageviews(filepath, returnroute=False):
+    """Reads a pageview file and returns a polars dataframe.
+
+    Args:
+        filepath (str): Path to the file.
+        returnroute (bool, optional): Whether to return if the polars/pandas
+        reader was used. Defaults to False.
+
+    Returns:
+        _type_: Polars dataframe with pageviews data.
+        bool (optional): Whether the polars reader was used.
+    """
+    polars = True
+    try:
+        # polars reader is erratic, so we need to find the first wikipedia line
+        # and the first wikipedia line with 6 columns
+        firstwikip, firstwikip6, data = find_file_lines(filepath)
+
+        # read the initial file lines with 5 columns with polars
+        if data:
+            df0 = pl.DataFrame(data).with_columns(
+                                            pl.lit('0').alias('id')
+                                            ).filter(
+                                            pl.col('domain').str.ends_with('.wikipedia')
+                                            ).with_columns(
+                                                pl.col('id').cast(pl.Int64),
+                                                pl.col('daily').cast(pl.Int64),
+                                            )
+        else:
+            df0 = pl.DataFrame(schema={'domain':str, 'page':str, 'id':int,
+                                       'source':str, 'daily':int, 'hourly':str})
+        
+        # read subsequent (mostly) 6 column lines with polars
+        df1 = pl.read_csv(filepath, separator=' ', has_header=False, skip_rows=firstwikip6,
+                            quote_char=None, null_values='', infer_schema_length=0,
+                            columns=list(range(6)),
+                            new_columns=['domain', 'page', 'id',  'source', 'daily', 'hourly']
+                            )
+    except pl.ComputeError as e: # if polars reader fails with 6 column read, try pandas
+        print('Polars reading error, trying pandas')
+        print(e)
+        polars = False
+        df0 = pl.DataFrame(schema={'domain':str, 'page':str, 'id':int,
+                                   'source':str, 'daily':int, 'hourly':str})
+        df1 = pl.from_pandas(pd.read_csv(filepath, sep=' ', header=None,
+                    keep_default_na=False, na_values='', quoting=3,
+                    names=['domain', 'page', 'id',  'source', 'daily', 'hourly'],
+                    dtype=str))
+    
+    # Some data wrangling needs to be done:
+    # 1. Some entries have data split across two rows, need to be merged.
+    # 2. We only need data for wikipedia domains.
+    # 3. Rows with missing ID need to have column data shifted across.
+    # 4. Cast ID and daily columns to int.
+
+    df1 = df1.with_columns( # 1. merge split rows 
+                            pl.when(pl.col('domain').is_null()
+                                    ).then(
+                                        pl.col('daily').alias('hourly')
+                                    ).otherwise(pl.col('hourly')),
+                            pl.when(pl.col('domain').is_null()
+                                    ).then(
+                                        pl.col('source').alias('daily')
+                                    ).otherwise(pl.col('daily')),
+                            pl.when(pl.col('domain').is_null()
+                                    ).then(
+                                        pl.col('id').alias('source')
+                                    ).otherwise(pl.col('source')),
+                            pl.when(pl.col('domain').is_null()
+                                    ).then(
+                                        pl.col('page').alias('id')
+                                    ).otherwise(pl.col('id')),
+                            pl.when(pl.col('domain').is_null()
+                                    ).then(
+                                        pl.col('page').shift(-1)
+                                    ).otherwise(pl.col('page')),
+                            pl.when(pl.col('domain').is_null()
+                                    ).then(
+                                        pl.col('domain').shift(-1)
+                                    ).otherwise(pl.col('domain'))
+                        ).drop_nulls(
+                        subset=['source']
+                        ).filter( # 2. only wikipedia domains
+                            pl.col('domain').str.ends_with('.wikipedia')
+                        ).with_columns( # 3. shift data for missing ID
+                            pl.when(
+                                pl.col('hourly').is_null()
+                            ).then(
+                                pl.lit(0).alias('id'),
+                            ).otherwise(
+                                pl.col('id')
+                            ),
+                            pl.when(
+                                pl.col('hourly').is_null()
+                            ).then(
+                                pl.col('id').alias('source'),
+                            ).otherwise(
+                                pl.col('source')
+                            ),
+                            pl.when(
+                                pl.col('hourly').is_null()
+                            ).then(
+                                pl.col('source').alias('daily'),
+                            ).otherwise(
+                                pl.col('daily'),
+                            ),
+                            pl.when(
+                                pl.col('hourly').is_null()
+                            ).then(
+                                pl.col('daily').alias('hourly'),
+                            ).otherwise(
+                                pl.col('hourly'),
+                            )
+                        ).with_columns( # 4. cast ID and daily columns to int
+                            pl.col('id').map_dict({'null':pl.Null()},
+                                        default=pl.first()).cast(pl.Int64),
+                            pl.col('daily').cast(pl.Int64)
+                        )
+
+    # combine dfs and add a column with the date
+    tdf = pl.concat(
+            [df0.select('domain', 'page', 'id',  'source', 'daily', 'hourly'),
+            df1]
+            ).with_columns(
+                pl.col('source').cast(pl.Categorical),
+            )
+    
+    if returnroute:
+        return tdf, polars
+    else:
+        return tdf
+
+def filter_pageviews(tdf, date, langarts, redirects, rdr_flat, fill_empty=False):
+    """Filter pageviews dataframe to only include pages in the list of pages.
+
+    Args:
+        tdf (_type_): Polars dataframe with pageviews data for that day.
+        date (_type_): Date of the pageviews data.
+        langarts (dict): Dictionary of languages and pages to include.
+        redirects (dict): Dictionary of redirects for each language.
+        rdr_flat (dict): Redirects of langpages to true page title.
+        fill_empty (bool, optional): Whether to fill values for days with no
+        data to 0. Defaults to False.
+
+    Returns:
+        _type_: Dataframe with pageviews data for that day, filtered to only
+        include pages in the list of pages.
+    """
+    # map hour letter to number
+    md = {x: ord(x)-65 for x in 'ABCDEFGHIJKLMNOPQRSTUVWX'}
+
+    # flatten articles and redirects required for filtering
+    rdartsl = {l: [y for x in arts for y in redirects[l][x]] for l, arts in langarts.items()}
+    rdartsl_flat = {'%s__%s' %(k, x) for k, v in rdartsl.items() for x in v}
+    del rdartsl
+    
+    gdf = tdf.with_columns( # add language column
+                        pl.col('domain').str.split('.').list.get(0).alias('lang')
+                    ).with_columns( # create unique langpage column for filtering
+                        pl.concat_str([pl.col('lang'), pl.lit('__'), pl.col('page')]
+                                    ).alias('langpage'),
+                    ).filter( # filter out pages not in the list
+                        pl.col('langpage').is_in(rdartsl_flat)
+                    ).select( # convert hourly column to list of tuples
+                        pl.col('hourly').str.extract_all('(\w)(\d+)'),
+                        'daily',
+                        pl.col('lang').cast(pl.Categorical),
+                        pl.col('langpage').map_dict(rdr_flat).alias('page') # map page to where it redirects to
+                    ).explode( # explode hourly column for unique entry per hour
+                        'hourly'
+                    ).select( # map hour letter to number and cast views per hour to int
+                        'lang',
+                        'page',
+                        'daily',
+                        pl.col('hourly').str.slice(0,1).map_dict(md).alias('hour'),
+                        pl.col('hourly').str.slice(1).alias('views').cast(pl.Int64)
+                    ).pivot( # pivot to get views per hour horizontally
+                        index=('lang', 'page', 'daily'), columns='hour',
+                        values='views', aggregate_function='sum'
+                    ).with_columns( # add missing hours if required
+                        *[pl.col(str(x)).cast(pl.Int64) for x in range(24)]
+                    ).groupby( # group by language, page
+                        'lang',
+                        'page'
+                    ).agg( # sum views per hour per unique page
+                        pl.col('daily').sum(),
+                        *[pl.col(str(x)).sum() for x in range(24)]
+                    ).with_columns( # add date column
+                        pl.lit(date).cast(pl.Date).alias('date')
+                    )
+    if fill_empty:
+        raise('not yet implemented')
+        # missing = 
+        # if missing:
+        #     fills = 
+        #     gdf = pl.concat([gdf, missing])
+        # pass
+
+    return gdf
+
+
+

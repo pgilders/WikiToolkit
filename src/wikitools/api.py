@@ -1,8 +1,71 @@
 import requests
 import pandas as pd
-from wikitools.tools import chunks
+import numpy as np
+import mwapi
+import asyncio
+import aiohttp
+from mwapi.errors import APIError
+from wikitools.tools import *
+# from wikitools.redirects import *
 
-def query(request, lang='en'):
+def query(session, query_args):
+    return session.get(action='query', **query_args)
+
+def iterate_query(continued, debug=False):
+    try:
+        for portion in continued:
+            if debug:
+                yield portion
+            elif 'query' in portion:
+                yield portion['query']['pages']
+            else:
+                print("MediaWiki returned empty result batch.")
+    except APIError as error:
+        raise ValueError("MediaWiki returned an error:", str(error))
+
+def query_continued(session, query_args, debug=False):
+    continued = session.get(action='query', continuation=True, **query_args)
+    yield from iterate_query(continued, debug)
+
+async def query_async(session, query_args, continuation=True, debug=False):
+    continued = await asyncio.create_task(session.get(action='query',
+                                                        continuation=continuation,
+                                                        **query_args))
+    if not continuation:
+        if debug:
+            return continued
+        elif 'query' in continued:
+            return continued['query']['pages']
+        else:
+            print("MediaWiki returned empty result batch.")
+            return None
+    
+    pages = []
+    try:
+        async for portion in continued:
+            if debug:
+                pages.append(portion)
+            elif 'query' in portion:
+                for page in portion['query']['pages']:
+                    pages.append(page)
+            else:
+                print("MediaWiki returned empty result batch.")
+    except APIError as error:
+        raise ValueError("MediaWiki returned an error:", str(error))
+    return pages
+
+async def iterate_async_query(session, query_args_list, function=None, args=[], continuation=True, debug=False):
+
+    if function:
+        tasks = [function(query_async(session, query_args, continuation, debug), *args)
+                  for query_args in query_args_list]    
+    else:
+        tasks = [query_async(session, query_args, continuation, debug) for query_args in query_args_list]
+    results = await asyncio.gather(*tasks)
+
+    return results
+
+def query_static(request, lang='en'):
     """
     Query Wikipedia API with specified parameters.
 
@@ -107,221 +170,33 @@ def qores(revid, lang='enwiki', model=''):
     return result
 
 
-#%% Redirects
-
-def fix_redirects(articles, existingmap={}, norms={}, lang='en',
-                  norm_keys=True, nonepages=True):
-    """
-    Map redirect name to true Wikipedia article name.
-
-    Parameters
-    ----------
-    articles : iterable
-        Wikipedia article names.
-    existingmap : dict, optional
-        If a (partial) existing map exists, combine. The default is {}.
-
-    Returns
-    -------
-    dict
-        Map with redirect name keys and true article name values.
-
-    """
-    tar_chunks = list(chunks(list(set(articles)-set(existingmap.keys())), 50))
-    mapping = {}
-    for n, i in enumerate(tar_chunks):
-        if (n % 100 == 0) & (n > 0):
-            print('Fixing redirects', round(100*n/len(tar_chunks), 2), '%')
-        istr = '|'.join(i)
-        params = {'titles': istr, 'redirects': ''}
-        dat = list(query(params, lang))
-        for j in dat:
-            if norm_keys:
-                try:
-                    for k in j['normalized']:
-                        norms[k['from'].replace(' ', '_')
-                              ] = k['to'].replace(' ', '_')
-
-                except KeyError:
-                    # print('No redirects in this chunk')
-                    pass
-
-            try:
-                for k in j['redirects']:
-                    mapping[k['from'].replace(' ', '_')
-                            ] = k['to'].replace(' ', '_')
-
-            except KeyError:
-                # print('No redirects in this chunk')
-                pass
-
-            if nonepages:
-                try:
-                    for k, v in j['pages'].items():
-                        if k[0] == '-':
-                            mapping[v['title'].replace(' ', '_')] = None
-
-                except KeyError:
-                    # print('No pages in this chunk')
-                    pass
-    # Apply mapping to self to fix second order redirects
-    # print('Consolidating mapping')
-    titlemap = mapping.copy()
-    for k, v in mapping.items():
-        for i in mapping.keys():
-            if i == v:
-                titlemap[k] = mapping[i]
-                break
-
-    if norm_keys:
-        return {**existingmap, **titlemap}, norms
+def querylister(titles=None, pageids=None, revids=None, generator=False,
+                norm_map={}, titles_redirect_map={}, pageids_redirect_map={},
+                params={}):
+    if not ((titles is not None) ^ (pageids is not None) ^ (revids is not None)):
+        raise ValueError('Must specify exactly one of titles, pageids or revids')
+    if generator:
+        cs = 1
     else:
-        return {**existingmap, **titlemap}
+        cs = 50
 
-
-def get_redirects(articles, existingrds={}, lang='en', verbose=False):
-    """
-    Get all redirects to a true Wikipedia article name.
-
-    Parameters
-    ----------
-    articles : iterable
-        Wikipedia article names.
-    existingrds : dict, optional
-        If a (partial) existing map exists, combine. The default is {}.
-
-    Returns
-    -------
-    dict
-        Map with true article name keys and all names that redirect to it
-        in a list as values.
-    """
-    tar_chunks = list(chunks(list(set(articles)-set(existingrds.keys())), 50))
-    rd_map = {x.replace(' ', '_'): [x.replace(' ', '_')] for x in articles}
-    for n, i in enumerate(tar_chunks):
-        if (verbose) & (n % 100 == 0):
-            print('Getting redirects %.2f%%' % (100*n/len(tar_chunks)))
-        istr = '|'.join(i)
-        params = {'titles': istr, 'prop': 'redirects',
-                  'rdlimit': 'max', 'rdnamespace': '0'}
-        try:
-            for j in query(params, lang=lang):
-                for k in j['pages'].values():
-                    try:
-                        rd_map[k['title'].replace(' ', '_')].extend(
-                            [x['title'].replace(' ', '_') for x in k['redirects']])
-                    except KeyError:
-                        pass
-        except ValueError:
-            for is2 in ['|'.join(istr.split('|')[:25]),
-                        '|'.join(istr.split('|')[25:])]:
-                params['titles'] = is2
-                for j in query(params, lang=lang):
-                    for k in j['pages'].values():
-                        try:
-                            rd_map[k['title'].replace(' ', '_')].extend(
-                                [x['title'].replace(' ', '_') for x in k['redirects']])
-                        except KeyError:
-                            pass
-    return {**existingrds, **rd_map}
-
-#%% links
-
-def get_links(articles, lang='en'):
-    """Get links on each article in list.
-
-    Args:
-        articles (list): List of articles.
-        lang (str, optional): Language. Defaults to 'en'.
-
-    Returns:
-        dict: Dictionary of articles and their links.
-    """
-    ldict = {x.replace(' ', '_'): [] for x in articles}
-
-    tar_chunks = list(chunks(list(set(articles)), 50))
-    for n, i in enumerate(tar_chunks):
-        istr = '|'.join(i)
-        params = {'titles': istr, 'prop': 'links', 'pllimit': 'max'}
-        for j in query(params, lang=lang):
-            for k in j['pages'].values():
-                try:
-                    ldict[k['title'].replace(' ', '_')] += [x['title']
-                                                            for x in k['links']]
-                except KeyError:
-                    pass
-
-    return ldict
-
-def get_langlinks(articles, lang='en'):
-    """    Get all lang links from a true Wikipedia article name.
-
-    Args:
-        articles (list): List of articles.
-        lang (str, optional): Language. Defaults to 'en'.
-
-    Returns:
-        dict: Dictionary of articles and their lang links.
-    """
-    lldict = {x.replace(' ', '_'): {lang: x.replace(' ', '_')}
-              for x in articles}
-
-    tar_chunks = list(chunks(list(set(articles)), 50))
-    for n, i in enumerate(tar_chunks):
-        istr = '|'.join(i)
-        params = {'titles': istr, 'prop': 'langlinks', 'lllimit': 'max'}
-        for j in query(params, lang=lang):
-            for k in j['pages'].values():
-                try:
-                    nd = {x['lang']: x['*'].replace(' ', '_')
-                          for x in k['langlinks']}
-                    lldict[k['title'].replace(' ', '_')].update(nd)
-                except KeyError:
-                    pass
-    return lldict
-
-
-#%% Revisions
-
-def get_revision(title, pageid, date, props=['timestamp', 'ids', 'content']):
-    """Get data for a particular revision of a page.
-
-    Args:
-        title (str): Article title.
-        pageid (int): Page ID of article.
-        date (_type_): Date to retrieve revision for.
-        props (list, optional): Revision properties to collect. Defaults to ['timestamp', 'ids', 'content'].
-
-    Returns:
-        _type_: DataFrame with revision data.
-    """
-
-    r = {'prop': 'revisions', 'titles': title, 'rvdir': 'older',
-         'rvstart': date, 'rvlimit': 1, 'rvslots': 'main',
-         'rvprop': '|'.join(props)}
-    rd = query(r)
-    dat = next(rd)
-    return pd.json_normalize(dat['pages'][str(pageid)]['revisions'][0])
-
-
-def get_revisions(title, pageid, start, stop, props=['timestamp', 'ids']):
-    """Get revisions for a page between two dates.
-
-    Args:
-        title (str): Article title.
-        pageid (int): Page ID of article.
-        start (_type_): Start date.
-        stop (_type_): Stop date.
-        props (list, optional): Revision properties to collect. Defaults to ['timestamp', 'ids'].
-
-    Returns:
-        _type_: DataFrame with revision data.
-    """
-
-    r = {'prop': 'revisions', 'titles': title, 'rvdir': 'newer',
-         'rvstart': start, 'rvend': stop, 'rvlimit': 'max', 'rvslots': 'main',
-         'rvprop': '|'.join(props)}
-    rd = query(r)
-    dat = [y for x in rd for y in x['pages'].get(pageid, {}).get('revisions', [])]
-    return pd.json_normalize(dat)
-
+    if titles is not None:
+        titles = process_articles(titles=titles, norm_map=norm_map, titles_redirect_map=titles_redirect_map)
+        tar_chunks = list(chunks(list(set(titles)), cs))
+        key = 'titles'
+        ix = 1
+    elif pageids is not None:
+        # add redirects here?
+        pageids = process_articles(pageids=pageids, pageids_redirect_map=pageids_redirect_map)
+        tar_chunks = list(chunks([str(x) for x in set(pageids)], cs))
+        key = 'pageids'
+        ix = 0
+    else:
+        tar_chunks = list(chunks([str(x) for x in set(revids)], cs))
+        key = 'revids'
+        ix = -1
+    
+    query_args_list = [{key: '|'.join(chunk), **params}
+                       for chunk in tar_chunks]
+    
+    return query_args_list, key, ix
