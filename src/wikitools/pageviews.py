@@ -19,7 +19,7 @@ def api_article_views(client, project, articles, redirects=True, norm_map=None, 
         if not redirect_map:
             redirect_map = {}
 
-    articles = process_articles(articles, norm_map, redirect_map)
+    articles = process_articles(articles, norm_map=norm_map, titles_redirect_map=redirect_map)
     
     rdpv = client.article_views(project, articles, access, agent, granularity,
                                 start, end)
