@@ -4,9 +4,7 @@ Useful functions for Wikipedia API and dumps
 
 ## Installation
 
-```bash
-$ pip install wikitools
-```
+- TODO
 
 ## Usage
 
