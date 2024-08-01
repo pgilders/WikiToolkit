@@ -90,7 +90,7 @@ async def get_links(session, mode='out', titles=None, pageids=None, norm_map={},
                 'redirects':resolve_redirects}
         if m in ['out', 'in']:
             params[modedict[m]['ns']] = ns
-        query_args_list, key, ix = querylister(titles, pageids, generator=(m in ['out', 'in']), norm_map=norm_map, redirect_map=redirect_map, params=params)
+        query_args_list, key, ix = querylister(titles, pageids, generator=(m in ['out', 'in']), norm_map=norm_map, titles_redirect_map=redirect_map, params=params)
         data = await iterate_async_query(session, query_args_list,
                                          function=parse_links, args=[modedict[m]['pval']],
                                          debug=resolve_redirects&(m in ['out', 'in']))

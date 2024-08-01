@@ -52,6 +52,8 @@ async def query_async(session, query_args, continuation=True, debug=False):
                 print("MediaWiki returned empty result batch.")
     except APIError as error:
         raise ValueError("MediaWiki returned an error:", str(error))
+    except ValueError as error:
+        raise ValueError("MediaWiki returned an error:", str(error))
     return pages
 
 async def iterate_async_query(session, query_args_list, function=None, args=[], continuation=True, debug=False):

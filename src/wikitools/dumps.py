@@ -10,7 +10,7 @@ import pandas as pd
 import polars as pl
 from scipy import stats
 from wikitools.tools import round_sig
-from wikitools.api import fix_redirects
+from wikitools.redirects import fix_redirects
 
 #%% Downloading and reading tables
 

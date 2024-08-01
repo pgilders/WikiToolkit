@@ -47,7 +47,7 @@ async def parse_redirects(data):
     return redirects, norms, ids
 
 async def fix_redirects(session, titles=None, pageids=None, revids=None,
-                     redirect_map=None, norm_map=None, id_map=None):
+                     redirect_map={}, norm_map={}, id_map={}):
     """
     Map redirect name to true Wikipedia article name.
 
@@ -66,7 +66,7 @@ async def fix_redirects(session, titles=None, pageids=None, revids=None,
     """
     query_list, key, ix = querylister(titles=titles, pageids=pageids,
                                         revids=revids, generator=False,
-                                        norm_map=norm_map, redirect_map=redirect_map,
+                                        norm_map=norm_map, titles_redirect_map=redirect_map,
                                         params={'redirects':''})
 
     data = await iterate_async_query(session, query_list, parse_redirects, debug=True)
@@ -132,7 +132,7 @@ async def get_redirects(session, titles=None, pageids=None, revids=None,
     # TODO: titles - collected_redirects 
     query_list, key, ix = querylister(titles=titles, pageids=pageids,
                                         revids=revids, generator=False,
-                                        norm_map=norm_map, redirect_map=redirect_map,
+                                        norm_map=norm_map, titles_redirect_map=redirect_map,
                                         params={'prop':'redirects', 'rdlimit': 'max'})
 
     data = await iterate_async_query(session, query_list, parse_fetched_redirects, debug=False)
