@@ -140,4 +140,7 @@ dmypy.json
 
 # MacOS
 .DS_Store
+
+# custom
 example.ipynb
+src/wikitools/dumps.py

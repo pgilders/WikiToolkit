@@ -17,20 +17,14 @@ def round_sig(x, sig=2):
 
 
 def chunks(l, n):
-    """
-    Split list l into list of lists of length n.
+    """Split list l into a list of lists of length n.
 
-    Parameters
-    ----------
-    l : list
-        Initial list.
-    n : int
-        Desired sublist size.
+    Args:
+        l (list): Initial list.
+        n (int): Desired sublist size.
 
-    Yields
-    ------
-    list
-        Subsequent sublists of length n.
+    Yields:
+        list: Subsequent sublists of length n.
 
     """
     # For item i in a range that is a length of l,
@@ -39,6 +33,21 @@ def chunks(l, n):
         yield l[i:i+n]
 
 def process_articles(titles=None, pageids=None, norm_map=None, titles_redirect_map=None, pageids_redirect_map=None):
+    """Process article titles or pageids. Runs normalisation and redirects.
+
+    Args:
+        titles (list, optional): The article titles to process. Must specify exactly one of titles or pageids. Defaults to None.
+        pageids (list, optional): The article IDs to process. Must specify exactly one of titles or pageids. Defaults to None.
+        norm_map (dict, optional): The existing title normalisation map. Defaults to None.
+        titles_redirect_map (dict, optional): The redirects for article titles. Defaults to None.
+        pageids_redirect_map (dict, optional): The redirects for article pageids. Defaults to None.
+
+    Raises:
+        ValueError: Must specify exactly one of titles or pageids
+
+    Returns:
+        list: Processed article titles or pageids.
+    """
     if not ((titles is not None) ^ (pageids is not None)):
         raise ValueError('Must specify exactly one of titles or pageids')
     elif (not titles)&(not pageids):
