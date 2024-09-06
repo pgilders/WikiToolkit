@@ -19,8 +19,8 @@ async def parse_revision(data):
     return rev_info
 
 async def get_revision(session, titles=None, pageids=None, date=None,
-                       norm_map={}, redirect_map={}, 
-                       props=['timestamp', 'ids'], return_props=None):
+                       pagemaps=None, props=['timestamp', 'ids'],
+                       return_props=None):
     """Get data for a particular revision of a page.
 
     Args:
@@ -38,6 +38,11 @@ async def get_revision(session, titles=None, pageids=None, date=None,
     if not (bool(titles) ^ bool(pageids)):
         raise ValueError('Must specify exactly one of title or pageid')
     
+    # Check if pagemaps is provided
+    if pagemaps is None:
+        print('Warning: No PageMaps object provided, this is not recommended practice') # TODO: make this a proper warning
+        pagemaps = PageMaps()    
+
     # Set default date if not provided
     if not date:
         date = datetime.datetime.now().isoformat()                   
@@ -48,7 +53,7 @@ async def get_revision(session, titles=None, pageids=None, date=None,
          'rvprop': '|'.join(props)}
 
     query_args_list, key, ix = querylister(titles, pageids, generator=True,
-                norm_map=norm_map, titles_redirect_map=redirect_map, params=params)
+                pagemaps=pagemaps, params=params)
 
     # Execute the API query and parse the revision data
     data = await iterate_async_query(session, query_args_list, function=parse_revision, continuation=False)
@@ -87,7 +92,7 @@ async def parse_revisions(data):
     return revisions
 
 async def get_revisions(session, titles=None, pageids=None, start=None, stop=None,
-                  norm_map={}, redirect_map={}, props=['timestamp', 'ids']):
+                  pagemaps=None, props=['timestamp', 'ids']):
     """Get revisions for a page between two dates.
 
     Args:
@@ -105,6 +110,11 @@ async def get_revisions(session, titles=None, pageids=None, start=None, stop=Non
     if not (bool(titles) ^ bool(pageids)):
         raise ValueError('Must specify exactly one of title or pageid')
     
+    # Check if pagemaps is provided
+    if pagemaps is None:
+        print('Warning: No PageMaps object provided, this is not recommended practice') # TODO: make this a proper warning
+        pagemaps = PageMaps()    
+
     # Set default stop date if not provided
     if not stop: # TODO: tidy date types str format
         stop = datetime.datetime.now()
@@ -120,7 +130,7 @@ async def get_revisions(session, titles=None, pageids=None, start=None, stop=Non
          'rvprop': '|'.join(props)}
     
     query_args_list, key, ix = querylister(titles, pageids, generator=True,
-                norm_map=norm_map, titles_redirect_map=redirect_map, params=params)
+                pagemaps=pagemaps, params=params)
 
     # Execute the API query and parse the revision data
     data = await iterate_async_query(session, query_args_list, function=parse_revisions, debug=False)
@@ -148,8 +158,7 @@ async def parse_revisions_data(data):
                                     for x in page['revisions']})
     return revisions_data
 
-async def get_revisions_data(session, revids, norm_map={}, redirect_map={},
-                             props=['timestamp', 'ids']):
+async def get_revisions_data(session, revids, pagemaps=None, props=['timestamp', 'ids']):
     """Get data on specific revisions.
 
     Args:
@@ -160,12 +169,16 @@ async def get_revisions_data(session, revids, norm_map={}, redirect_map={},
     Returns:
         dict: Revisions data
     """
+    # Check if pagemaps is provided
+    if pagemaps is None:
+        print('Warning: No PageMaps object provided, this is not recommended practice') # TODO: make this a proper warning
+        pagemaps = PageMaps()    
+        
     if (type(revids) == int)| (type(revids) == str):
         revids = [revids]                 
     
     params = {'prop': 'revisions', 'rvslots': 'main', 'rvprop': '|'.join(props)}
-    query_args_list, key, ix = querylister(revids=revids, norm_map=norm_map,
-                                           titles_redirect_map=redirect_map,
+    query_args_list, key, ix = querylister(revids=revids, pagemaps=pagemaps,
                                            params=params)
 
     data = await iterate_async_query(session, query_args_list, function=parse_revisions_data, debug=False)
@@ -188,7 +201,7 @@ async def parse_revisions_content(data):
                                 for x in page['revisions']})
     return revisions_content
 
-async def get_revisions_content(session, revids, norm_map={}, redirect_map={}):
+async def get_revisions_content(session, revids, pagemaps=None):
     """Get revision content for a list of revision IDs.
 
     Args:
@@ -197,14 +210,18 @@ async def get_revisions_content(session, revids, norm_map={}, redirect_map={}):
     Returns:
         dict: The content of the revisions.
     """
+    # Check if pagemaps is provided
+    if pagemaps is None:
+        print('Warning: No PageMaps object provided, this is not recommended practice') # TODO: make this a proper warning
+        pagemaps = PageMaps()    
+        
     # Check if revids is a single value and convert it to a list
     if (type(revids) == int) | (type(revids) == str):
         revids = [revids]                 
     
     # Construct the query arguments list for each chunk of revids
     params = {'prop': 'revisions', 'rvslots': 'main', 'rvprop': 'ids|content'}
-    query_args_list, key, ix = querylister(revids=revids, norm_map=norm_map,
-                                           titles_redirect_map=redirect_map,
+    query_args_list, key, ix = querylister(revids=revids, pagemaps=pagemaps,
                                            params=params)    
 
     # Execute the API query and parse the revisions content
@@ -217,21 +234,27 @@ async def get_revisions_content(session, revids, norm_map={}, redirect_map={}):
 
 
 
-async def pipeline_revisions(project, user_agent, mode, titles=None, pageids=None, revids=None, id_map=None, norm_map=None, redirect_map=None,
-                             collected_redirects=None, rf_args={}, asynchronous=True, session_args={'formatversion':2}):
+async def pipeline_revisions(project, user_agent, mode, titles=None, pageids=None,
+                             revids=None, pagemaps=None, rf_args={},
+                             asynchronous=True, session_args={'formatversion':2}):
     
 
-    # Create dictionaries to store the return maps
-    return_maps = {'id_map': id_map, 'redirect_map': redirect_map,
-                   'norm_map': norm_map, 'collected_redirects': collected_redirects}
+    # # Create dictionaries to store the return maps
+    # return_maps = {'id_map': id_map, 'redirect_map': redirect_map,
+    #                'norm_map': norm_map, 'collected_redirects': collected_redirects}
     
-    # Create a dictionary to store boolean values indicating whether the return maps are None or not
-    return_bools = {k: v is None for k, v in return_maps.items()}
+    # # Create a dictionary to store boolean values indicating whether the return maps are None or not
+    # return_bools = {k: v is None for k, v in return_maps.items()}
 
-    # Initialize empty dictionaries for the return maps if they are None
-    for k, v in return_maps.items():
-        if v is None:
-            return_maps[k] = {}
+    # # Initialize empty dictionaries for the return maps if they are None
+    # for k, v in return_maps.items():
+    #     if v is None:
+    #         return_maps[k] = {}
+    if pagemaps is None:
+        return_pm = True
+        pagemaps = PageMaps()
+    else:
+        return_pm = False
 
     # Construct the URL based on the project
     url = f'https://{project}.org'
@@ -250,26 +273,29 @@ async def pipeline_revisions(project, user_agent, mode, titles=None, pageids=Non
     if asynchronous:
         # Fix redirects if titles are provided
         if titles:
-            await fix_redirects(async_session, titles, redirect_map=return_maps['redirect_map'],
-                                norm_map=return_maps['norm_map'], id_map=return_maps['id_map'])
+            await pagemaps.fix_redirects(async_session, titles=titles)
         # Declare the article list type based on the mode
         article_list = {'titles': titles, 'pageids': pageids, 'revids': revids}
         article_list = {k: v for k, v in article_list.items() if v}
         # Get revision data using the async session
-        revisions = await mode_dict[mode](async_session, norm_map=return_maps['norm_map'],
-                                          redirect_map=return_maps['redirect_map'],
+        revisions = await mode_dict[mode](async_session, pagemaps=pagemaps,
                                           **article_list, **rf_args)
         # Close the async session
         await async_session.session.close()
     else:
         raise ValueError('Only async supported at present.') 
 
-    # Check if any of the return maps were None and return the appropriate dictionary
-    if any(return_bools.values()): 
-        return_dict = {'revisions': revisions}
-        for k, v in return_bools.items():
-            if v:
-                return_dict[k] = return_maps[k]
-        return return_dict
+    if return_pm:
+        return revisions, pagemaps
     else:
         return revisions
+
+    # # Check if any of the return maps were None and return the appropriate dictionary
+    # if any(return_bools.values()): 
+    #     return_dict = {'revisions': revisions}
+    #     for k, v in return_bools.items():
+    #         if v:
+    #             return_dict[k] = return_maps[k]
+    #     return return_dict
+    # else:
+    #     return revisions

@@ -15,7 +15,6 @@ def round_sig(x, sig=2):
     else:
         return 0
 
-
 def chunks(l, n):
     """Split list l into a list of lists of length n.
 
@@ -32,15 +31,13 @@ def chunks(l, n):
         # Create an index range for l of n items:
         yield l[i:i+n]
 
-def process_articles(titles=None, pageids=None, norm_map=None, titles_redirect_map=None, pageids_redirect_map=None):
+def process_articles(titles=None, pageids=None, pagemaps=None):
     """Process article titles or pageids. Runs normalisation and redirects.
 
     Args:
         titles (list, optional): The article titles to process. Must specify exactly one of titles or pageids. Defaults to None.
         pageids (list, optional): The article IDs to process. Must specify exactly one of titles or pageids. Defaults to None.
-        norm_map (dict, optional): The existing title normalisation map. Defaults to None.
-        titles_redirect_map (dict, optional): The redirects for article titles. Defaults to None.
-        pageids_redirect_map (dict, optional): The redirects for article pageids. Defaults to None.
+        pagemaps (PageMaps, optional): The PageMaps object to map redirects with. Defaults to None.
 
     Raises:
         ValueError: Must specify exactly one of titles or pageids
@@ -55,68 +52,17 @@ def process_articles(titles=None, pageids=None, norm_map=None, titles_redirect_m
 
     if titles:
         items = titles
-        redirect_map = titles_redirect_map
+        redirect_map = pagemaps.titles_redirect_map
     else:
         items = pageids
-        redirect_map = pageids_redirect_map
+        redirect_map = pagemaps.pageids_redirect_map
 
     if (type(items) == str)|(type(items) == int):
         items = [items]
 
     if titles:
-        items = [norm_map.get(a, a) for a in items]
+        items = [pagemaps.norm_map.get(a, a) for a in items]
     items = [redirect_map.get(a, a) for a in items]
     items = list(dict.fromkeys([a for a in items if a]))
 
     return items
-
-
-# def wiki_details(row):
-#     out = []
-#     # if row['entities.urls'] != row['entities.urls']:
-#     # return []
-#     for link in row['entities.urls']:
-#         match = re.match("https:\/\/([^\/]*).wikipedia.org\/([^\/]*)/([^?]*)",
-#                          link.get('unwound_url', ''))
-#         if match:
-#             locale = match.group(1)
-#             endpoint = match.group(2)
-#             page = urllib.parse.unquote(match.group(3))
-#             lang = locale.replace('.m', '')
-#             if '.m' in locale:
-#                 mobile = True
-#             else:
-#                 mobile = False
-
-#             out.append({'tweet_id': row.name, 'tweet_date': row['created_at'],
-#                         'url': link['unwound_url'], 'url_start': link['start'],
-#                         'url_end': link['end'], 'lang': lang,
-#                         'endpoint': endpoint, 'page': page, 'mobile': mobile})
-#     return out
-
-# def wiki_details2(row):
-#     out = []
-#     # if row['entities.urls'] != row['entities.urls']:
-#     # return []
-#     for link in row['entities.urls']:
-#         match = re.match("https:\/\/([^\/]*).wikipedia.org\/([^\/]*)/([^?]*)",
-#                          link.get('unwound_url', ''))
-#         if match:
-#             locale = match.group(1)
-#             endpoint = match.group(2)
-#             page = urllib.parse.unquote(match.group(3))
-#             lang = locale.replace('.m', '')
-#             if '.m' in locale:
-#                 mobile = True
-#             else:
-#                 mobile = False
-
-#             out.append({'tweet_id': row.name, 'tweet_date': row['created_at'],
-#                         'url': link['unwound_url'], 'lang': lang,
-#                         'endpoint': endpoint, 'page': page, 'mobile': mobile})
-#     return out
-
-
-
-
-

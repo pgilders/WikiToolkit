@@ -3,7 +3,7 @@ from wikitools.api import *
 import pickle
 
 async def basic_info(session, titles=None, pageids=None, revids=None,
-                     titles_redirect_map={}, norm_map={}, id_map={}, params={}, function=None, f_args={}, debug=False):
+                     pagemaps=None, params={}, function=None, f_args={}, debug=False):
     """Runs a basic (customisable) API query for Wikipedia article information.
 
     Args:
@@ -11,9 +11,7 @@ async def basic_info(session, titles=None, pageids=None, revids=None,
         titles (list, optional): The article titles to collect info for. Defaults to None.
         pageids (list, optional): The article IDs to collect info for. Defaults to None.
         revids (list, optional): The revision IDs to collect info for. Defaults to None.
-        titles_redirect_map (dict, optional): The map for title redirects. Defaults to {}.
-        norm_map (dict, optional): The map for title normalisation. Defaults to {}.
-        id_map (dict, optional): The map for title to pageids. Defaults to {}.
+        pagemaps (PageMaps, optional): The PageMaps object to map redirects with. Defaults to None.
         params (dict, optional): Query parameters. Defaults to {}.
         function (function, optional): Function to parse API output. Defaults to None.
         f_args (dict, optional): Arguments for parsing function. Defaults to {}.
@@ -26,7 +24,7 @@ async def basic_info(session, titles=None, pageids=None, revids=None,
     # Construct the query list
     query_list, key, ix = querylister(titles=titles, pageids=pageids,
                                            revids=revids, generator=False,
-                                           norm_map=norm_map, titles_redirect_map=titles_redirect_map,
+                                           pagemaps=pagemaps,
                                            params=params)
 
     # Execute the async query and parse the data
@@ -65,7 +63,7 @@ async def parse_redirects(data):
     return redirects, norms, ids
 
 async def fix_redirects(session, titles=None, pageids=None, revids=None,
-                     redirect_map={}, norm_map={}, id_map={}):
+                        pagemaps=None):
     """Gets the canonical page name for a list of articles. Updates the redirect map, norm map, and ID map in place.
 
     Args:
@@ -73,29 +71,30 @@ async def fix_redirects(session, titles=None, pageids=None, revids=None,
         titles (list, optional): article titles to find canonical page for. Defaults to None.
         pageids (list, optional): article page IDs to find canonical page for. Defaults to None.
         revids (list, optional): article revision IDs to find canonical page for. Defaults to None.
-        redirect_map (dict, optional): The map for title redirects. Defaults to None.
-        norm_map (dict, optional): The map for title normalisation. Defaults to None.
-        id_map (dict, optional): The map for title to pageids. Defaults to None.
+        pagemaps (PageMaps, optional): The PageMaps object to update. Defaults to None.
     """
+    # Create a new PageMaps object if none was provided
+    if pagemaps is None:
+        pagemaps = PageMaps()
+        rp = True
+    else:
+        rp = False
+
     # Construct the query list
     query_list, key, ix = querylister(titles=titles, pageids=pageids,
                                         revids=revids, generator=False,
-                                        norm_map=norm_map, titles_redirect_map=redirect_map,
+                                        pagemaps=pagemaps,
                                         params={'redirects':''})
 
     # Execute the async query and parse the data
     data = await iterate_async_query(session, query_list, parse_redirects, debug=True)
 
-    # Extract the redirects, normalized titles, and page IDs from the data
-    redirects = {key: val for d in data for key, val in d[0].items()}
-    norms = {key: val for d in data for key, val in d[1].items()}
-    ids = {key: val for d in data for key, val in d[2].items()}
-
     # Update the redirect map, norm map, and ID map with the extracted data
-    redirect_map.update(redirects)
-    norm_map.update(norms)
-    id_map.update(ids)
+    await pagemaps.update_maps(session, data)
 
+    # Return the updated pagemaps object if none was provided
+    if rp:
+        return pagemaps
 
 async def parse_fetched_redirects(data):
     """Parses fetched redirects from the Wikipedia API.
@@ -123,8 +122,7 @@ async def parse_fetched_redirects(data):
     return f_redirects, ids
 
 async def get_redirects(session, titles=None, pageids=None, revids=None,
-                     redirect_map=None, norm_map=None, id_map=None,
-                     collected_redirects=None):
+                        pagemaps=None):
     """Gets all redirects for a list of articles. Updates the collected redirects, redirect map, and ID map in place.
 
     Args:
@@ -132,143 +130,255 @@ async def get_redirects(session, titles=None, pageids=None, revids=None,
         titles (list, optional): article titles to find all redirects for. Defaults to None.
         pageids (list, optional): article page IDs to find all redirects for. Defaults to None.
         revids (list, optional): article revision IDs to find all redirects for. Defaults to None.
-        redirect_map (dict, optional): The map for title redirects. Defaults to None.
-        norm_map (dict, optional): The map for title normalisation. Defaults to None.
-        id_map (dict, optional): The map for title to pageids. Defaults to None.
-        collected_redirects (dict, optional): Pre-existing collected redirects. Defaults to None.
+        pagemaps (PageMaps, optional): The PageMaps object to update. Defaults to None.
     """
+    # Create a new PageMaps object if none was provided
+    if pagemaps is None:
+        pagemaps = PageMaps()
+        rp = True
+    else:
+        rp = False
 
-    # TODO: titles - collected_redirects 
+    # Fix redirects in input titles first
+    await pagemaps.fix_redirects(session, titles=titles, pageids=pageids, revids=revids)
+
     # Construct the query list
     query_list, key, ix = querylister(titles=titles, pageids=pageids,
                                         revids=revids, generator=False,
-                                        norm_map=norm_map, titles_redirect_map=redirect_map,
+                                        pagemaps=pagemaps,
                                         params={'prop':'redirects', 'rdlimit': 'max'})
 
     # Execute the async query and parse the data
     data = await iterate_async_query(session, query_list, parse_fetched_redirects, debug=False)
 
-    # Extract the fetched redirects, reverse redirects, and page IDs from the data
-    f_redirects = {key: val for d in data for key, val in d[0].items()}
-    reverse_redirects = {x: k for k, v in f_redirects.items() for x in v}
-    ids = {key: val for d in data for key, val in d[1].items()}
-
     # Update the collected redirects, redirect map, and ID map with the extracted data
-    collected_redirects.update(f_redirects)
-    redirect_map.update(reverse_redirects)
-    id_map.update(ids)
+    pagemaps.update_collected_redirect_maps(data)
 
-# class PageMaps:
-#     """_summary_
-#     """
-#     def __init__(self, titles_redirect_map={}, pageids_redirect_map={},
-#                  norm_map={}, id_map={}, revid_map={}, collected_title_redirects={},
-#                  collected_pageid_redirects={}):
-#         self.titles_redirect_map = titles_redirect_map
-#         self.pageids_redirect_map = pageids_redirect_map
-#         self.norm_map = norm_map
-#         self.id_map = id_map
-#         self.revid_map = revid_map
-#         self.collected_title_redirects = collected_title_redirects
-#         self.collected_pageid_redirects = collected_pageid_redirects
+    # Return the updated pagemaps object if none was provided
+    if rp:
+        return pagemaps
 
-#     async def fix_redirects(self, session, titles=None, pageids=None, revids=None):
-#         if titles:
-#             titles = [self.norm_map.get(a, a) for a in titles]
-#             titles = [self.titles_redirect_map.get(a, a) for a in titles]
-#             titles = list(dict.fromkeys([a for a in titles if a]))
-#             titles = [a for a in titles if a not in self.titles_redirect_map]
-#             if not titles:
-#                 return
-#         elif pageids:
-#             pageids = [self.pageids_redirect_map.get(int(a), int(a)) for a in pageids]
-#             pageids = list(dict.fromkeys([a for a in pageids if a is not None]))
-#             pageids = [a for a in pageids if a not in self.pageids_redirect_map]
-#             if not pageids:
-#                 return
+class PageMaps:
+    """A class for fixing, collecting, and managing redirect and ID data.
+    """
+    def __init__(self, titles_redirect_map=None, pageids_redirect_map=None,
+                 norm_map=None, id_map=None, revid_map=None, collected_title_redirects=None,
+                 collected_pageid_redirects=None):
+        """Initialise the PageMaps object.
 
-#         query_list, key, ix = querylister(titles=titles, pageids=pageids,
-#                                             revids=revids, generator=False,
-#                                             norm_map=self.norm_map,
-#                                             titles_redirect_map=self.titles_redirect_map,
-#                                             pageids_redirect_map=self.pageids_redirect_map,
-#                                             params={'redirects':''})
+        Args:
+            titles_redirect_map (dict, optional): A dictionary of redirects to their canonical title. Defaults to None.
+            pageids_redirect_map (dict, optional): A dictionary of redirect page IDs to their canonical page IDs. Defaults to None.
+            norm_map (dict, optional): A dictionary of non-normalised to normalised titles. Defaults to None.
+            id_map (dict, optional): A dictionary of titles to page IDs. Defaults to None.
+            revid_map (dict, optional): A dictionary of revision IDs to their canonical page IDs. Defaults to None.
+            collected_title_redirects (dict, optional): A dictionary of canonical titles to all their redirects. Defaults to None.
+            collected_pageid_redirects (dict, optional): A dictionary of canonical page IDs to all their redirect page IDs. Defaults to None.
+        """
+        self.titles_redirect_map = titles_redirect_map if titles_redirect_map is not None else {}
+        self.pageids_redirect_map = pageids_redirect_map if pageids_redirect_map is not None else {}
+        self.norm_map = norm_map if norm_map is not None else {}
+        self.id_map = id_map if id_map is not None else {}
+        self.revid_map = revid_map if revid_map is not None else {} # not really used
+        self.collected_title_redirects = collected_title_redirects if collected_title_redirects is not None else {}
+        self.collected_pageid_redirects = collected_pageid_redirects if collected_pageid_redirects is not None else {}
 
-#         data = await iterate_async_query(session, query_list, parse_redirects, debug=True)
-#         redirects = {key: val for d in data for key, val in d[0].items()}
-#         norms = {key: val for d in data for key, val in d[1].items()}
-#         ids = {key: val for d in data for key, val in d[2].items()}
-#         missing_ids = [k for k in redirects.keys() if k not in self.id_map]
-#         mdata = await basic_info(session, titles=missing_ids, function=parse_redirects,
-#                                  titles_redirect_map=self.titles_redirect_map,
-#                                  norm_map=self.norm_map, debug=True)
-#         update_ids = {key: val for d in mdata for key, val in d[2].items()}
-#         update_ids.update({x: -1 for x in missing_ids if x not in update_ids})
+    def filter_input(self, collected, titles=None, pageids=None, revids=None):
+        """Filter the input titles or page IDs based on the already processed data.
 
-#         self.titles_redirect_map.update(redirects)
-#         self.norm_map.update(norms)
-#         self.id_map.update(ids)
-#         self.id_map.update(update_ids)
-#         self.pageids_redirect_map.update({self.id_map[k] if k is not None else None: self.id_map[v] if v is not None else None
-#                                           for k, v in redirects.items()})
+        Args:
+            collected (iterable): The already processed titles or page IDs.
+            titles (list, optional): Article titles to filter. Defaults to None.
+            pageids (list, optional): Article page IDs to filter. Defaults to None.
+            revids (list, optional): Article revision IDs to filter. Defaults to None.
+
+        Raises:
+            ValueError: If more than one of titles, pageids, or revids is specified.
+            ValueError: If revids are specified (not yet supported).
+
+        Returns:
+            tuple: Filtered titles, filtered page IDs, filtered revision IDs.
+        """
+        # Filter out already processed titles and page IDs
+        if not bool(titles)^bool(pageids)^bool(revids):
+            raise ValueError('Must specify exactly one of titles, pageids or revids')
+
+        if titles:
+            if type(titles) == str:
+                titles = [titles]
+            titles = [self.norm_map.get(a, a) for a in titles]
+            titles = [self.titles_redirect_map.get(a, a) for a in titles]
+            titles = list(dict.fromkeys([a for a in titles if a]))
+            titles = [a for a in titles if a not in collected]
+        elif pageids:
+            if (type(pageids) == int) | (type(pageids) == str):
+                pageids = [int(pageids)]
+            pageids = [self.pageids_redirect_map.get(int(a), int(a)) for a in pageids]
+            pageids = list(dict.fromkeys([a for a in pageids if a is not None]))
+            pageids = [a for a in pageids if a not in collected]
+        else:
+            raise ValueError('Revision IDs not yet supported')
         
-#     async def get_redirects(self, session, titles=None, pageids=None, revids=None):
-#         if titles:
-#             if type(titles) == str:
-#                 titles = [titles]
-#             titles = [self.norm_map.get(a, a) for a in titles]
-#             titles = [self.titles_redirect_map.get(a, a) for a in titles]
-#             titles = list(dict.fromkeys([a for a in titles if a]))
-#             titles = [a for a in titles if a not in self.collected_title_redirects]
-#             if not titles:
-#                 return
-#         elif pageids:
-#             if (type(pageids) == int) | (type(pageids) == str):
-#                 pageids = [int(pageids)]
-#             pageids = [self.pageids_redirect_map.get(int(a), int(a)) for a in pageids]
-#             pageids = list(dict.fromkeys([a for a in pageids if a is not None]))
-#             pageids = [a for a in pageids if a not in self.collected_pageid_redirects]
-#             if not pageids:
-#                 return
+        return titles, pageids, revids
 
-#         # TODO: handle revisions
+    async def update_maps(self, session, data):
+        """Updates the redirect maps, norm map, and ID map with the extracted API data.
 
-#         await self.fix_redirects(session, titles=titles, pageids=pageids, revids=revids)
+        Args:
+            session (mwapi.Session): mwapi session.
+            data (list): Wikipedia API data.
+        """
+        
+        # Extract the redirects, normalized titles, and page IDs from the data
+        redirects = {key: val for d in data for key, val in d[0].items()}
+        norms = {key: val for d in data for key, val in d[1].items()}
+        ids = {key: val for d in data for key, val in d[2].items()}
+        missing_ids = [k for k in redirects.keys() if (k not in ids)|(k not in self.id_map)]
 
-#         query_list, key, ix = querylister(titles=titles, pageids=pageids,
-#                                             revids=revids, generator=False,
-#                                             norm_map=self.norm_map,
-#                                             titles_redirect_map=self.titles_redirect_map,
-#                                             pageids_redirect_map=self.pageids_redirect_map,
-#                                             params={'prop':'redirects', 'rdlimit': 'max'})
+        missing_ids = [k for k in redirects.keys() if k not in self.id_map]
+        mdata = await basic_info(session, titles=missing_ids, function=parse_redirects,
+                                 pagemaps=self, debug=True)
+        update_ids = {key: val for d in mdata for key, val in d[2].items()}
+        update_ids.update({x: -1 for x in missing_ids if x not in update_ids})
 
-#         data = await iterate_async_query(session, query_list, parse_fetched_redirects, debug=False)
-
-#         f_redirects = {key: val for d in data for key, val in d[0].items()}
-#         reverse_redirects = {x: k for k, v in f_redirects.items() for x in v}
-#         ids = {key: val for d in data for key, val in d[1].items()}
-
-#         self.collected_title_redirects.update(f_redirects)
-#         self.titles_redirect_map.update(reverse_redirects)
-#         self.id_map.update(ids)
-
-#         self.pageids_redirect_map.update({self.id_map[k]: self.id_map[v]
-#                                           for k, v in reverse_redirects.items()})
-#         self.collected_pageid_redirects.update({self.id_map[k]: [self.id_map[x] for x in v]
-#                                           for k, v in f_redirects.items()})
+        # update the maps
+        self.titles_redirect_map.update(redirects)
+        self.norm_map.update(norms)
+        self.id_map.update(ids)
+        self.id_map.update(update_ids)
+        self.pageids_redirect_map.update({self.id_map[k] if k is not None else None: self.id_map[v] if v is not None else None
+                                          for k, v in redirects.items()})
     
-#     def return_maps(self):
-#         return self.titles_redirect_map, self.pageids_redirect_map, self.norm_map, self.id_map, self.collected_title_redirects, self.collected_pageid_redirects
+    async def update_collected_redirect_maps(self, data):
+        """Updates the collected redirects, redirect maps, and ID maps with the extracted API data.
 
-#     def save_maps(self, path):
-#         #untested
-#         with open(path, 'wb') as f:
-#             pickle.dump(self.return_maps(), f)
+        Args:
+            data (list): Data from the Wikipedia API.
+        """
+        f_redirects = {key: val for d in data for key, val in d[0].items()}
+        reverse_redirects = {x: k for k, v in f_redirects.items() for x in v}
+        ids = {key: val for d in data for key, val in d[1].items()}
 
-#     def load_maps(self, path):
-#         #untested
-#         with open(path, 'rb') as f:
-#             self.titles_redirect_map, self.pageids_redirect_map, self.norm_map, self.id_map, self.collected_title_redirects, self.collected_pageid_redirects = pickle.load(f)
+        # Update the collected redirects, redirect map, and ID map with the extracted data
+        self.titles_redirect_map.update(reverse_redirects)
+        self.id_map.update(ids)
+        self.pageids_redirect_map.update({self.id_map[k]: self.id_map[v]
+                                          for k, v in reverse_redirects.items()})
+        self.collected_title_redirects.update(f_redirects)
+        self.collected_pageid_redirects.update({self.id_map[k]: [self.id_map[x] for x in v]
+                                          for k, v in f_redirects.items()})
+        
+    async def fix_redirects(self, session, titles=None, pageids=None, revids=None):
+        """Gets the canonical page name for a list of articles. Updates the redirect map, norm map, and ID map in place.
+
+        Args:
+            session (mwapi.Session): mwapi session.
+            titles (list, optional): article titles to find canonical page for. Defaults to None.
+            pageids (list, optional): article page IDs to find canonical page for. Defaults to None.
+            revids (list, optional): article revision IDs to find canonical page for. Defaults to None.
+        """
+
+        # Filter out already processed titles and page IDs
+        if titles:
+            collected = self.id_map
+        elif pageids:
+            collected = self.id_map.values()
+        titles, pageids, revids = self.filter_input(collected, titles=titles,
+                                                    pageids=pageids, revids=revids)
+        # If no new titles or page IDs are left, finish
+        if not any([titles, pageids, revids]):
+            return
+            
+        # Construct the query list
+        query_list, key, ix = querylister(titles=titles, pageids=pageids,
+                                            revids=revids, generator=False,
+                                            pagemaps=self,
+                                            params={'redirects':''})
+
+        # Execute the async query and parse the data
+        data = await iterate_async_query(session, query_list, parse_redirects, debug=True)
+        await self.update_maps(session, data)
+        
+    async def get_redirects(self, session, titles=None, pageids=None, revids=None):
+        """Gets all redirects for a list of articles. Updates the collected redirects, redirect map, and ID map in place.
+
+        Args:
+            session (mwapi.Session): mwapi session.
+            titles (list, optional): article titles to find all redirects for. Defaults to None.
+            pageids (list, optional): article page IDs to find all redirects for. Defaults to None.
+            revids (list, optional): article revision IDs to find all redirects for. Defaults to None.
+        """
+
+        # Filter out already processed titles and page IDs
+        if titles:
+            collected = self.collected_title_redirects
+        elif pageids:
+            collected = self.collected_pageid_redirects.values()
+        titles, pageids, revids = self.filter_input(collected, titles=titles,
+                                                    pageids=pageids, revids=revids)
+        # If no new titles or page IDs are left, finish
+        if not any([titles, pageids, revids]):
+            return
+
+        # TODO: handle revisions
+        await self.fix_redirects(session, titles=titles, pageids=pageids, revids=revids)
+
+        query_list, key, ix = querylister(titles=titles, pageids=pageids,
+                                    revids=revids, generator=False,
+                                    pagemaps=self,
+                                    params={'prop':'redirects', 'rdlimit': 'max'})
+
+        # Execute the async query and parse the data
+        data = await iterate_async_query(session, query_list, parse_fetched_redirects, debug=False)
+
+        # Update the collected redirects, redirect map, and ID map with the extracted data
+        await self.update_collected_redirect_maps(data)
+
+    def return_maps(self):
+        """Return the page maps.
+
+        Returns:
+            dict: A dictionary containing the titles redirect map, pageids redirect map, norm map, id map,
+              collected title redirects, and collected pageid redirects.
+        """
+        return {'titles_redirect_map': self.titles_redirect_map,
+                'pageids_redirect_map': self.pageids_redirect_map,
+                'norm_map': self.norm_map, 'id_map': self.id_map,
+                'collected_title_redirects': self.collected_title_redirects,
+                'collected_pageid_redirects': self.collected_pageid_redirects}
+
+    def save_maps(self, path):
+        """Saves the page maps to a file.
+
+        Args:
+            path (srt): File path to save the maps to.
+        """
+        #untested
+        with open(path, 'wb') as f:
+            pickle.dump(self.return_maps(), f)
+
+    def load_maps(self, path):
+        """Reads the page maps from a file.
+
+        Args:
+            path (str): File path to read the maps from.
+        """
+        #untested
+        with open(path, 'rb') as f:
+            data = pickle.load(f)
+        self.titles_redirect_map = data['titles_redirect_map']
+        self.pageids_redirect_map = data['pageids_redirect_map']
+        self.norm_map = data['norm_map']
+        self.id_map = data['id_map']
+        self.collected_title_redirects = data['collected_title_redirects']
+        self.collected_pageid_redirects = data['collected_pageid_redirects']
     
-#     def __str__(self):
-#         return f"Redirects: {len(self.titles_redirect_map)}, Norms: {len(self.norm_map)}, IDs: {len(self.id_map)}, Existing: {len(self.collected_title_redirects)}"
+    def __str__(self):
+        """Return a string representation of the PageMaps object.
+
+        Returns:
+            str: A string containing information about the number of titles in the titles_redirect_map,
+                 the number of norms in the norm_map, the number of IDs in the id_map, and the number
+                 of collected_title_redirects.
+        """
+        return f"Redirects: {len(self.titles_redirect_map)}, Norms: {len(self.norm_map)}, IDs: {len(self.id_map)}, Existing: {len(self.collected_title_redirects)}"

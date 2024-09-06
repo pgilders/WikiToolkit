@@ -74,7 +74,7 @@ async def parse_links(data, prop):
     else:
         return links
 
-async def get_links(session, mode='out', titles=None, pageids=None, norm_map={}, redirect_map={}, id_map={}, namespaces=[0], update_maps=False, batchsize=200):
+async def get_links(session, mode='out', titles=None, pageids=None, pagemaps=None, namespaces=[0], update_maps=False, batchsize=200):
     """Get links to/from a list of articles from the API. Runs asynchronously.
 
     Args:
@@ -99,7 +99,12 @@ async def get_links(session, mode='out', titles=None, pageids=None, norm_map={},
     # Check if titles or pageids are specified
     if not (bool(titles) ^ bool(pageids)):
         raise ValueError('Must specify exactly one of titles or pageids')
-    
+    if pagemaps is None:
+        if update_maps:
+            raise ValueError('Must provide PageMaps object if update_maps is True')
+        print('Warning: No PageMaps object provided, this is not recommended practice') # TODO: make this a proper warning
+        pagemaps = PageMaps()
+
     # Convert namespaces to string representation
     if namespaces == 'all':
         ns = '*'
@@ -147,14 +152,25 @@ async def get_links(session, mode='out', titles=None, pageids=None, norm_map={},
                 # Create a list of query arguments
                 query_args_list, key, ix = querylister(b_titles, b_pageids,
                                                     generator=(m in ['out', 'in']),
-                                                    norm_map=norm_map,
-                                                    titles_redirect_map=redirect_map,
+                                                    pagemaps=pagemaps,
                                                     params=params)
                 # Query the API for the links
                 data = await iterate_async_query(session, query_args_list,
                                                 function=parse_links, f_args=[modedict[m]['pval']],
                                                 debug=update_maps&(m in ['out', 'in']))
-            
+
+                # Parse the data for regular out/in-links and update the maps if necessary
+                if m in ['out', 'in']:
+                    data_keys = [x[key] for x in query_args_list]
+                    missing = [data_keys[n] for n in range(len(data)) if data[n][0] is None]
+                    b_links = dict(zip(data_keys, [x[0] for x in data]))
+                    if update_maps:
+                        update_data = [x[1:] for x in data]
+                        missing_data = [({x: None for x in missing}, {}, {x: -1 for x in missing})]
+                        await pagemaps.update_maps(session, update_data + missing_data)
+                else:
+                    b_links = {k[ix]: val for d in data for k, val in d.items()}
+
             # handle rate error, this doesn't all run automatically, so need to address further issues
             # except (ValueError, ConnectionError, ClientConnectorError, ConnectionResetError) as v: ????
             except Exception as v: # TODO: Be more specific here
@@ -166,22 +182,7 @@ async def get_links(session, mode='out', titles=None, pageids=None, norm_map={},
                 print('Trying again at n=%d with batchsize=%d' % (n, batchsize))
                 continue
 
-            # Parse the data for regular out/in-links and update the maps if necessary
-            if m in ['out', 'in']:
-                data_keys = [x[key] for x in query_args_list]
-                b_links = dict(zip(data_keys, [x[0] for x in data]))
-                if update_maps:
-                    for x in data:
-                        redirect_map.update(x[1])
-                        norm_map.update(x[2])
-                        id_map.update(x[3])
-                    missing = [k for k, v in b_links.items() if v is None]
-                    redirect_map.update({x: None for x in missing})
-                    id_map.update({x: -1 for x in missing})
-            else:
-                b_links = {k[ix]: val for d in data for k, val in d.items()}
-
-            # Update the links dictionary wuth the links from the batch
+            # Update the links dictionary with the links from the batch
             links.update(b_links)
 
             # Update the index to start collecting the next batch
@@ -200,8 +201,7 @@ async def get_links(session, mode='out', titles=None, pageids=None, norm_map={},
     else:
         return return_dict
 
-
-async def pipeline_get_links(project, user_agent, titles=None, pageids=None, id_map=None, norm_map=None, redirect_map=None,
+async def pipeline_get_links(project, user_agent, titles=None, pageids=None, pagemaps=None,
                              gl_args={'update_maps':True}, asynchronous=True, session_args={'formatversion':2}):
     """Runs full pipeline for getting links from the API - creating a session, collecting redirects, collecting links. Runs asynchronously.
 
@@ -224,16 +224,12 @@ async def pipeline_get_links(project, user_agent, titles=None, pageids=None, id_
         dict: A dictionary of links, and optionally the norm_map, redirect_map and id_map.
     """
 
-    # Create dictionaries to store the return maps
-    return_maps = {'id_map': id_map, 'redirect_map': redirect_map, 'norm_map': norm_map}
-    
-    # Create a dictionary to store boolean values indicating whether the return maps are None or not
-    return_bools = {k: v is None for k, v in return_maps.items()}
-
-    # Initialize empty dictionaries for the return maps if they are None
-    for k, v in return_maps.items():
-        if v is None:
-            return_maps[k] = {}
+    # Create a PageMaps object if not provided
+    if pagemaps is None:
+        return_pm = True
+        pagemaps = PageMaps()
+    else:
+        return_pm = False
 
     # Construct the URL based on the project
     url = f'https://{project}.org'
@@ -249,24 +245,17 @@ async def pipeline_get_links(project, user_agent, titles=None, pageids=None, id_
     if asynchronous:
         # Fix redirects if titles are provided
         if titles:
-            await fix_redirects(async_session, titles, redirect_map=return_maps['redirect_map'],
-                                norm_map=return_maps['norm_map'], id_map=return_maps['id_map'])
+            await pagemaps.fix_redirects(async_session, titles=titles)
         
         # Get links using the async session
-        links = await get_links(async_session, titles=titles, pageids=pageids, norm_map=return_maps['norm_map'],
-                        redirect_map=return_maps['redirect_map'], id_map=return_maps['id_map'], **gl_args)
+        links = await get_links(async_session, titles=titles, pageids=pageids, pagemaps=pagemaps, **gl_args)
         
         # Close the async session
         await async_session.session.close()
     else:
         raise ValueError('Only async supported at present.')
     
-    # Check if any of the return maps were None and return the appropriate dictionary
-    if any(return_bools.values()): 
-        return_dict = {'links': links}
-        for k, v in return_bools.items():
-            if v:
-                return_dict[k] = return_maps[k]
-        return return_dict
+    if return_pm:
+        return links, pagemaps
     else:
         return links

@@ -1389,3 +1389,48 @@ def filter_pageviews(tdf, date, langarts, redirects, rdr_flat, fill_empty=False)
 
 
 
+# def wiki_details(row):
+#     out = []
+#     # if row['entities.urls'] != row['entities.urls']:
+#     # return []
+#     for link in row['entities.urls']:
+#         match = re.match("https:\/\/([^\/]*).wikipedia.org\/([^\/]*)/([^?]*)",
+#                          link.get('unwound_url', ''))
+#         if match:
+#             locale = match.group(1)
+#             endpoint = match.group(2)
+#             page = urllib.parse.unquote(match.group(3))
+#             lang = locale.replace('.m', '')
+#             if '.m' in locale:
+#                 mobile = True
+#             else:
+#                 mobile = False
+
+#             out.append({'tweet_id': row.name, 'tweet_date': row['created_at'],
+#                         'url': link['unwound_url'], 'url_start': link['start'],
+#                         'url_end': link['end'], 'lang': lang,
+#                         'endpoint': endpoint, 'page': page, 'mobile': mobile})
+#     return out
+
+# def wiki_details2(row):
+#     out = []
+#     # if row['entities.urls'] != row['entities.urls']:
+#     # return []
+#     for link in row['entities.urls']:
+#         match = re.match("https:\/\/([^\/]*).wikipedia.org\/([^\/]*)/([^?]*)",
+#                          link.get('unwound_url', ''))
+#         if match:
+#             locale = match.group(1)
+#             endpoint = match.group(2)
+#             page = urllib.parse.unquote(match.group(3))
+#             lang = locale.replace('.m', '')
+#             if '.m' in locale:
+#                 mobile = True
+#             else:
+#                 mobile = False
+
+#             out.append({'tweet_id': row.name, 'tweet_date': row['created_at'],
+#                         'url': link['unwound_url'], 'lang': lang,
+#                         'endpoint': endpoint, 'page': page, 'mobile': mobile})
+#     return out
+

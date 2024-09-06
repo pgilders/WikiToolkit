@@ -223,8 +223,7 @@ def qores(revid, lang='enwiki', model=''):
 
 
 def querylister(titles=None, pageids=None, revids=None, generator=False,
-                norm_map={}, titles_redirect_map={}, pageids_redirect_map={},
-                params={}):
+                pagemaps=None, params={}):
     """Creates a list of queries for the Wikipedia API. Normalises and redirects article titles or pageids.
 
     Args:
@@ -232,9 +231,7 @@ def querylister(titles=None, pageids=None, revids=None, generator=False,
         pageids (list, optional): The article IDs to collect info for. Defaults to None.
         revids (list, optional): The revision IDs to collect info for. Defaults to None.
         generator (bool, optional): Whether to use API generator option. Defaults to False.
-        titles_redirect_map (dict, optional): The map for title redirects. Defaults to {}.
-        norm_map (dict, optional): The map for title normalisation. Defaults to {}.
-        pageids_redirect_map (dict, optional): The map for page ID redirects. Defaults to {}.
+        pagemaps (PageMaps, optional): The PageMaps object to map redirects with. Defaults to None.
         params (dict, optional): Query parameters. Defaults to {}.
 
     Raises:
@@ -255,13 +252,13 @@ def querylister(titles=None, pageids=None, revids=None, generator=False,
 
     if titles is not None:
         # Process article titles and handle redirects
-        titles = process_articles(titles=titles, norm_map=norm_map, titles_redirect_map=titles_redirect_map)
+        titles = process_articles(titles=titles, pagemaps=pagemaps)
         tar_chunks = list(chunks(list(set(titles)), cs))
         key = 'titles'
         ix = 1
     elif pageids is not None:
         # Process page IDs and handle redirects
-        pageids = process_articles(pageids=pageids, pageids_redirect_map=pageids_redirect_map)
+        pageids = process_articles(pageids=pageids, pagemaps=pagemaps)
         tar_chunks = list(chunks([str(x) for x in set(pageids)], cs))
         key = 'pageids'
         ix = 0
