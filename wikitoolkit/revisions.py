@@ -1,8 +1,8 @@
 import datetime
 import mwapi
-from wikitools.tools import chunks
-from wikitools.api import *
-from wikitools.redirects import *
+from .tools import chunks
+from .api import *
+from .redirects import *
 
 async def parse_revision(data):
     """Parse single revision data from the API.

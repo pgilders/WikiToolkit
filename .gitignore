@@ -143,4 +143,4 @@ dmypy.json
 
 # custom
 example.ipynb
-src/wikitools/dumps.py
+wikitoolkit/dumps.py

@@ -1,5 +1,5 @@
-from wikitools.tools import *
-from wikitools.redirects import *
+from .tools import *
+from .redirects import *
 import mwapi
 from mwviews.api import PageviewsClient
 from mwviews import *

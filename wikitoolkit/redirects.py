@@ -1,5 +1,5 @@
-from wikitools.tools import chunks
-from wikitools.api import *
+from .tools import chunks
+from .api import *
 import pickle
 
 async def basic_info(session, titles=None, pageids=None, revids=None,

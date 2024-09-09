@@ -1,7 +1,7 @@
 import requests
 import asyncio
 from mwapi.errors import APIError
-from wikitools.tools import *
+from .tools import *
 
 def query(session, query_args):
     """Run a query to the MediaWiki API.

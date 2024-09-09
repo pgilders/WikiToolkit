@@ -1,5 +1,5 @@
-from wikitools.api import *
-from wikitools.redirects import *
+from .api import *
+from .redirects import *
 import mwapi
 import time
 
