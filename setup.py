@@ -1,6 +1,6 @@
 from setuptools import setup, find_packages
 
-VERSION = '0.0.1' 
+VERSION = '0.0.2' 
 DESCRIPTION = 'A set of tools for extracting and working with Wikipedia API and dump data.'
 LONG_DESCRIPTION = 'WikiToolkit is a Python package that provides a set of tools for extracting and working with Wikipedia API and dump data.'
 
