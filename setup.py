@@ -13,7 +13,7 @@ setup(
         description=DESCRIPTION,
         long_description=LONG_DESCRIPTION,
         packages=find_packages(),
-        install_requires=['numpy'],
+        install_requires=['mwapi', 'mwviews'],
         keywords=['python', 'wikipedia', 'wikimedia', 'mediawiki', 'API', 'dump'],
         classifiers= [
             "Development Status :: 3 - Alpha",
