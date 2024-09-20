@@ -1,13 +1,16 @@
 import requests
 import asyncio
+import aiohttp
+import mwapi
 from mwapi.errors import APIError
+from mwviews.api import PageviewsClient
 from .tools import *
 
 def query(session, query_args):
     """Run a query to the MediaWiki API.
 
     Args:
-        session (mwapi.Session): The mwapi session.
+        session (wikitoolkit.WTSession.session): The wikitoolkit session.
         query_args (dict): The query arguments.
 
     Returns:
@@ -43,7 +46,7 @@ def query_continued(session, query_args, debug=False):
     """Run a continued query to the MediaWiki API.
 
     Args:
-        session (mwapi.Session): The mwapi session.
+        session (wikitoolkit.WTSession.session): The wikitoolkit session.
         query_args (dict): The query arguments.
         debug (bool, optional): Whether to print debug output. Defaults to False.
 
@@ -53,11 +56,11 @@ def query_continued(session, query_args, debug=False):
     continued = session.get(action='query', continuation=True, **query_args)
     yield from iterate_query(continued, debug)
 
-async def query_async(session, query_args, continuation=True, debug=False):
+async def query_async(session, query_args, continuation=True, debug=False, httpmethod='GET', posturl=None):
     """Create an async query to the MediaWiki API.
 
     Args:
-        session (mwapi.Session): The async mwapi session.
+        session (wikitoolkit.WTSession.session): The wikitoolkit session.
         query_args (dict): The query arguments.
         continuation (bool, optional): Whether to use continuation. Defaults to True.
         debug (bool, optional): Whether to print debug output. Defaults to False.
@@ -69,9 +72,16 @@ async def query_async(session, query_args, continuation=True, debug=False):
         list: List of pages returned by API.
     """
     # Perform the initial query
-    continued = await asyncio.create_task(session.get(action='query',
-                                                      continuation=continuation,
-                                                      **query_args))
+    if httpmethod == 'GET':
+        continued = await asyncio.create_task(session.get(action='query',
+                                                        continuation=continuation,
+                                                        **query_args))
+    elif httpmethod == 'POST':
+        async with session.post(url=posturl, json=query_args) as response:
+            continued = await response.json()
+        return continued
+    else:
+        raise ValueError("Invalid HTTP method.")
     
     # Check if continuation is False
     if not continuation:
@@ -101,11 +111,11 @@ async def query_async(session, query_args, continuation=True, debug=False):
     
     return pages
 
-async def iterate_async_query(session, query_args_list, function=None, f_args=[], continuation=True, debug=False):
+async def iterate_async_query(session, query_args_list, function=None, f_args=[], continuation=True, debug=False, httpmethod='GET', posturl=None):
     """Iterate through a list of queries asynchronously.
 
     Args:
-        session (mwapi.Session): The async mwapi session.
+        session (wikitoolkit.WTSession.session): The wikitoolkit session.
         query_args_list (list): List of queries to run.
         function (function, optional): Function to parse API output. Defaults to None.
         f_args (dict, optional): Arguments for parsing function. Defaults to [].
@@ -117,10 +127,10 @@ async def iterate_async_query(session, query_args_list, function=None, f_args=[]
     """
     # Create a list of tasks to be executed asynchronously
     if function:
-        tasks = [function(query_async(session, query_args, continuation, debug), *f_args)
+        tasks = [function(query_async(session, query_args, continuation, debug, httpmethod, posturl), *f_args)
                   for query_args in query_args_list]    
     else:
-        tasks = [query_async(session, query_args, continuation, debug) for query_args in query_args_list]
+        tasks = [query_async(session, query_args, continuation, debug, httpmethod, posturl) for query_args in query_args_list]
     
     # Execute the tasks asynchronously and gather the results
     results = await asyncio.gather(*tasks)
@@ -273,3 +283,33 @@ def querylister(titles=None, pageids=None, revids=None, generator=False,
                        for chunk in tar_chunks]
     
     return query_args_list, key, ix
+
+class WTSession:
+    """Session manager for querying the MediaWiki APIs.
+
+    Args:
+        project (str): The project name.
+        user_agent (str): The user agent string.
+        headers (dict, optional): HTTP headers. Defaults to {}.
+        mw_session_args (dict, optional): mwapi session arguments. Defaults to {'formatversion':2}.
+        lw_session_args (dict, optional): aiohttp session arguments. Defaults to {}.
+        pv_client_args (dict, optional): PageviewsClient arguments. Defaults to {}.
+    """
+    def __init__(self, project, user_agent, headers={},
+                 mw_session_args={'formatversion':2},
+                 lw_session_args={}, pv_client_args={}):
+        mw_url = f'https://{project}.org'
+        self.user_agent = user_agent
+        self.mw_session = mwapi.AsyncSession(mw_url, user_agent=user_agent, **mw_session_args)
+        self.pv_client = PageviewsClient(user_agent=user_agent, **pv_client_args)
+        self.lw_session = aiohttp.ClientSession('https://api.wikimedia.org',
+                                                headers=headers.update({'user-agent': user_agent}),
+                                                **lw_session_args)
+
+    async def close(self):
+        """Close the session objects."""
+        await self.mw_session.session.close()
+        await self.lw_session.close()
+
+    def __str__(self):
+        return f"WTSession object with user agent {self.user_agent}"

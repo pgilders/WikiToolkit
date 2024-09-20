@@ -5,13 +5,13 @@ from mwviews.api import PageviewsClient
 from mwviews import *
 
 
-def api_article_views(client, project, articles, redirects=True, pagemaps=None,
+def api_article_views(wtsession, project, articles, redirects=True, pagemaps=None,
                       access='all-access', agent='all-agents', granularity='daily',
                       start=None, end=None, replace_nones=True, process=True):
     """Get pageviews for articles from the mwviews API.
 
     Args:
-        client (mwviews.api.PageviewsClient): mwviews client
+        wtsession (wikitoolkit.WTSession): The wikitoolkit session manager.
         project (str): The wiki project.
         articles (list): List of article titles to get pageviews for.
         redirects (bool, optional): Whether to include redirects (and group pageviews by them). Defaults to True.
@@ -41,7 +41,7 @@ def api_article_views(client, project, articles, redirects=True, pagemaps=None,
         articles = process_articles(articles, pagemaps=pagemaps)
     
     # Get the article views using the mwviews client
-    rdpv = client.article_views(project, articles, access, agent, granularity,
+    rdpv = wtsession.pv_client.article_views(project, articles, access, agent, granularity,
                                 start, end)
 
     # If redirects are requested, group the pageviews by redirects
@@ -107,15 +107,15 @@ async def pipeline_api_article_views(project, user_agent, articles, pagemaps=Non
 
     # Create the session and client objects based on the asynchronous flag
     if asynchronous:
-        async_session = mwapi.AsyncSession(url, user_agent=user_agent, **session_args)
+        wtsession = WTSession(project, user_agent, mw_session_args=session_args,
+                            pv_client_args=client_args)
     else:
-        session = mwapi.Session(url, user_agent=user_agent, **session_args)
-    client = PageviewsClient(user_agent=user_agent, **client_args)
+        raise ValueError('Only async supported at present.')
 
     # If asynchronous, fix redirects and get existing redirects
     if asynchronous:
-        await pagemaps.get_redirects(async_session, articles)
-        await async_session.session.close()
+        await pagemaps.get_redirects(wtsession, articles)
+        await wtsession.close()
     else:
         raise ValueError('Only async supported at present.')
     
@@ -124,7 +124,7 @@ async def pipeline_api_article_views(project, user_agent, articles, pagemaps=Non
     articles = [y for x in articles for y in pagemaps.collected_title_redirects[x]]
     
     # Call the api_article_views function to get the pageviews
-    pageviews = api_article_views(client, project, articles, pagemaps=pagemaps,
+    pageviews = api_article_views(wtsession, project, articles, pagemaps=pagemaps,
                                   process=False, **aav_args)
     if rp:
         return pageviews, pagemaps

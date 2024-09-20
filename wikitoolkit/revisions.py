@@ -24,10 +24,11 @@ async def get_revision(session, titles=None, pageids=None, date=None,
     """Get data for a particular revision of a page.
 
     Args:
-        session (mwapi.Session): The mwapi session.    
+        session (wikitoolkit.WTSession): The wikitoolkit session manager.
         titles (list, optional): Article titles. Defaul ts to None.
         pageids (list, optional): Page IDs. Defaults to None.
         date (str): Date to retrieve revision for. Defaults to None.
+        pagemaps (wikitools.PageMap, optional): PageMap object to track redirects. Defaults to None.
         props (list, optional): Revision properties to collect. Defaults to ['timestamp', 'ids', 'content'].
         return_props (list, optional): Revision properties to return. Defaults to None.
 
@@ -56,7 +57,7 @@ async def get_revision(session, titles=None, pageids=None, date=None,
                 pagemaps=pagemaps, params=params)
 
     # Execute the API query and parse the revision data
-    data = await iterate_async_query(session, query_args_list, function=parse_revision, continuation=False)
+    data = await iterate_async_query(session.mw_session, query_args_list, function=parse_revision, continuation=False)
     
     # Organize the revision data based on titles or pageids
     if titles:
@@ -91,16 +92,17 @@ async def parse_revisions(data):
 
     return revisions
 
-async def get_revisions(session, titles=None, pageids=None, start=None, stop=None,
+async def get_revisions(wtsession, titles=None, pageids=None, start=None, stop=None,
                   pagemaps=None, props=['timestamp', 'ids']):
     """Get revisions for a page between two dates.
 
     Args:
-        session (mwapi.Session): The mwapi session.
+        wtsession (wikitoolkit.WTSession): The wikitoolkit session manager.
         titles (list, optional): Article titles. Defaults to None.
         pageids (list, optional): Page IDs. Defaults to None.
         start (str): Start date. Defaults to None.
         stop (str): Stop date. Defaults to None.
+        pagemaps (wikitools.PageMap, optional): PageMap object to track redirects. Defaults to None.
         props (list, optional): Revision properties to collect. Defaults to ['timestamp', 'ids'].
     
     Returns:
@@ -133,7 +135,7 @@ async def get_revisions(session, titles=None, pageids=None, start=None, stop=Non
                 pagemaps=pagemaps, params=params)
 
     # Execute the API query and parse the revision data
-    data = await iterate_async_query(session, query_args_list, function=parse_revisions, debug=False)
+    data = await iterate_async_query(wtsession.mw_session, query_args_list, function=parse_revisions, debug=False)
 
     # Organize the revision data based on titles or pageids
     if titles:
@@ -158,12 +160,13 @@ async def parse_revisions_data(data):
                                     for x in page['revisions']})
     return revisions_data
 
-async def get_revisions_data(session, revids, pagemaps=None, props=['timestamp', 'ids']):
+async def get_revisions_data(wtsession, revids, pagemaps=None, props=['timestamp', 'ids']):
     """Get data on specific revisions.
 
     Args:
-        session (mwapi.Session): The mwapi session.
+        wtsession (wikitoolkit.WTSession): The wikitoolkit session manager.
         revids (list): The revision IDs to collect data for.
+        pagemaps (wikitools.PageMap, optional): PageMap object to track redirects. Defaults to None.
         props (list, optional): Revision properties to collect. Defaults to ['timestamp', 'ids'].
 
     Returns:
@@ -181,7 +184,7 @@ async def get_revisions_data(session, revids, pagemaps=None, props=['timestamp',
     query_args_list, key, ix = querylister(revids=revids, pagemaps=pagemaps,
                                            params=params)
 
-    data = await iterate_async_query(session, query_args_list, function=parse_revisions_data, debug=False)
+    data = await iterate_async_query(wtsession.mw_session, query_args_list, function=parse_revisions_data, debug=False)
     revisions_data = {k:v for d in data for k, v in d.items()}
 
     return revisions_data
@@ -201,12 +204,13 @@ async def parse_revisions_content(data):
                                 for x in page['revisions']})
     return revisions_content
 
-async def get_revisions_content(session, revids, pagemaps=None):
+async def get_revisions_content(wtsession, revids, pagemaps=None):
     """Get revision content for a list of revision IDs.
 
     Args:
-        session (mwapi.Session): The mwapi session.
+        wtsession (wikitoolkit.WTSession): The wikitoolkit session manager.
         revids (list): The revision IDs to collect data for.
+        pagemaps (wikitools.PageMap, optional): PageMap object to track redirects. Defaults to None.
     Returns:
         dict: The content of the revisions.
     """
@@ -225,7 +229,7 @@ async def get_revisions_content(session, revids, pagemaps=None):
                                            params=params)    
 
     # Execute the API query and parse the revisions content
-    data = await iterate_async_query(session, query_args_list, function=parse_revisions_content, debug=False)
+    data = await iterate_async_query(wtsession.mw_session, query_args_list, function=parse_revisions_content, debug=False)
     
     # Combine the revisions content from different chunks into a single dictionary
     revisions_content = {k:v for d in data for k, v in d.items()}
@@ -237,34 +241,40 @@ async def get_revisions_content(session, revids, pagemaps=None):
 async def pipeline_revisions(project, user_agent, mode, titles=None, pageids=None,
                              revids=None, pagemaps=None, rf_args={},
                              asynchronous=True, session_args={'formatversion':2}):
-    
+    """Runs full pipeline for getting revisions data from the API - creating a session, collecting redirects, collecting revisions. Runs asynchronously.
 
-    # # Create dictionaries to store the return maps
-    # return_maps = {'id_map': id_map, 'redirect_map': redirect_map,
-    #                'norm_map': norm_map, 'collected_redirects': collected_redirects}
-    
-    # # Create a dictionary to store boolean values indicating whether the return maps are None or not
-    # return_bools = {k: v is None for k, v in return_maps.items()}
+    Args:
+        project (str): The Wikimedia project to query.
+        user_agent (str): The user agent string to use.
+        mode (str): The mode to use for collecting revisions. Must be one of 'single', 'range', 'data', or 'content'.
+        titles (list, optional): The article titles to collect revision data for. Must specify exactly one of titles or pageids or revisions. Defaults to None.
+        pageids (list, optional): The article IDs to collect revision data for. Must specify exactly one of titles or pageids or revisions. Defaults to None.
+        revids (list, optional): The revisions IDs to collect revision data for. Must specify exactly one of titles or pageids or revisions. Defaults to None.
+        pagemaps (wikitools.PageMap, optional): PageMap object to track redirects. Defaults to None.
+        rf_args (dict, optional): Arguments to supply the revisions function. Defaults to {}.
+        asynchronous (bool, optional): Whether to collect asynchronously. Defaults to True.
+        session_args (dict, optional): Arguments for the mwapi session. Defaults to {'formatversion':2}.
 
-    # # Initialize empty dictionaries for the return maps if they are None
-    # for k, v in return_maps.items():
-    #     if v is None:
-    #         return_maps[k] = {}
+    Raises:
+        ValueError: If asynchronous is False (unsupported at present).
+
+    Returns:
+        dict: The revisions data, and optionally the pagemaps object.
+    """
+
+    # Check if pagemaps is provided
     if pagemaps is None:
         return_pm = True
         pagemaps = PageMaps()
     else:
         return_pm = False
 
-    # Construct the URL based on the project
-    url = f'https://{project}.org'
-
     # Create an async session if asynchronous is True
     if asynchronous:
-        async_session = mwapi.AsyncSession(url, user_agent=user_agent, **session_args)
+        wtsession = WTSession(project, user_agent, mw_session_args=session_args)
     else:
         raise ValueError('Only async supported at present.')
-        session = mwapi.Session(url, user_agent=user_agent, **session_args)
+        wtsession = mwapi.Session(url, user_agent=user_agent, **session_args)
 
     mode_dict = {'single': get_revision, 'range': get_revisions,
             'data':get_revisions_data, 'content': get_revisions_content}
@@ -273,15 +283,15 @@ async def pipeline_revisions(project, user_agent, mode, titles=None, pageids=Non
     if asynchronous:
         # Fix redirects if titles are provided
         if titles:
-            await pagemaps.fix_redirects(async_session, titles=titles)
+            await pagemaps.fix_redirects(wtsession, titles=titles)
         # Declare the article list type based on the mode
         article_list = {'titles': titles, 'pageids': pageids, 'revids': revids}
         article_list = {k: v for k, v in article_list.items() if v}
         # Get revision data using the async session
-        revisions = await mode_dict[mode](async_session, pagemaps=pagemaps,
+        revisions = await mode_dict[mode](wtsession, pagemaps=pagemaps,
                                           **article_list, **rf_args)
         # Close the async session
-        await async_session.session.close()
+        await wtsession.close()
     else:
         raise ValueError('Only async supported at present.') 
 
@@ -290,12 +300,3 @@ async def pipeline_revisions(project, user_agent, mode, titles=None, pageids=Non
     else:
         return revisions
 
-    # # Check if any of the return maps were None and return the appropriate dictionary
-    # if any(return_bools.values()): 
-    #     return_dict = {'revisions': revisions}
-    #     for k, v in return_bools.items():
-    #         if v:
-    #             return_dict[k] = return_maps[k]
-    #     return return_dict
-    # else:
-    #     return revisions

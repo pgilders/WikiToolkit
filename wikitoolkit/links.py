@@ -74,17 +74,15 @@ async def parse_links(data, prop):
     else:
         return links
 
-async def get_links(session, mode='out', titles=None, pageids=None, pagemaps=None, namespaces=[0], update_maps=False, batchsize=200):
+async def get_links(wtsession, mode='out', titles=None, pageids=None, pagemaps=None, namespaces=[0], update_maps=False, batchsize=200):
     """Get links to/from a list of articles from the API. Runs asynchronously.
 
     Args:
-        session (mwapi.Session): The async mwapi session.
+        wtsession (wikitoolkit.WTSession): The wikitoolkit session manager.
         mode (str / list, optional): The kind of links to get. Defaults to 'out'.
         titles (list, optional): The article titles to collect links for. Must specify exactly one of titles or pageids. Defaults to None.
         pageids (list, optional): The article IDs to collect links for. Must specify exactly one of titles or pageids. Defaults to None.
-        norm_map (dict, optional): The map for title normalisation. Defaults to {}.
-        redirect_map (dict, optional): The map for title redirects. Defaults to {}.
-        id_map (dict, optional): The map for title to pageids. Defaults to {}.
+        pagemaps (wikitools.PageMap, optional): PageMap object to track redirects. Defaults to None.
         namespaces (list, optional): The wiki namespaces to collect links from. Defaults to [0].
         update_maps (bool, optional): Whether to update maps on link collection. Defaults to False.
         batchsize (int, optional): How many pages to collect links for at a time - for rate limiting purposes. Defaults to 200.
@@ -155,7 +153,7 @@ async def get_links(session, mode='out', titles=None, pageids=None, pagemaps=Non
                                                     pagemaps=pagemaps,
                                                     params=params)
                 # Query the API for the links
-                data = await iterate_async_query(session, query_args_list,
+                data = await iterate_async_query(wtsession.mw_session, query_args_list,
                                                 function=parse_links, f_args=[modedict[m]['pval']],
                                                 debug=update_maps&(m in ['out', 'in']))
 
@@ -167,7 +165,7 @@ async def get_links(session, mode='out', titles=None, pageids=None, pagemaps=Non
                     if update_maps:
                         update_data = [x[1:] for x in data]
                         missing_data = [({x: None for x in missing}, {}, {x: -1 for x in missing})]
-                        await pagemaps.update_maps(session, update_data + missing_data)
+                        await pagemaps.update_maps(wtsession, update_data + missing_data)
                 else:
                     b_links = {k[ix]: val for d in data for k, val in d.items()}
 
@@ -210,9 +208,7 @@ async def pipeline_get_links(project, user_agent, titles=None, pageids=None, pag
         user_agent (str): The user agent string to use.
         titles (list, optional): The article titles to collect links for. Must specify exactly one of titles or pageids. Defaults to None.
         pageids (list, optional): The article IDs to collect links for. Must specify exactly one of titles or pageids. Defaults to None.
-        norm_map (dict, optional): The map for title normalisation. Defaults to {}.
-        redirect_map (dict, optional): The map for title redirects. Defaults to {}.
-        id_map (dict, optional): The map for title to pageids. Defaults to {}.
+        pagemaps (wikitools.PageMap, optional): PageMap object to track redirects. Defaults to None.
         gl_args (dict, optional): Arguments to supply the get_links function. Defaults to {'update_maps':True}.
         asynchronous (bool, optional): Whether to collect asynchronously. Defaults to True.
         session_args (dict, optional): Arguments for the mwapi session. Defaults to {'formatversion':2}.
@@ -221,7 +217,7 @@ async def pipeline_get_links(project, user_agent, titles=None, pageids=None, pag
         ValueError: If asynchronous is False (unsupported).
 
     Returns:
-        dict: A dictionary of links, and optionally the norm_map, redirect_map and id_map.
+        dict: A dictionary of links, and optionally the pagemaps object.
     """
 
     # Create a PageMaps object if not provided
@@ -236,22 +232,22 @@ async def pipeline_get_links(project, user_agent, titles=None, pageids=None, pag
 
     # Create an async session if asynchronous is True
     if asynchronous:
-        async_session = mwapi.AsyncSession(url, user_agent=user_agent, **session_args)
+        wtsession = WTSession(project, user_agent, mw_session_args=session_args)
     else:
         raise ValueError('Only async supported at present.')
-        session = mwapi.Session(url, user_agent=user_agent, **session_args)
+        wtsession = mwapi.Session(url, user_agent=user_agent, **session_args)
 
     # Perform necessary operations if asynchronous is True
     if asynchronous:
         # Fix redirects if titles are provided
         if titles:
-            await pagemaps.fix_redirects(async_session, titles=titles)
+            await pagemaps.fix_redirects(wtsession, titles=titles)
         
         # Get links using the async session
-        links = await get_links(async_session, titles=titles, pageids=pageids, pagemaps=pagemaps, **gl_args)
+        links = await get_links(wtsession, titles=titles, pageids=pageids, pagemaps=pagemaps, **gl_args)
         
         # Close the async session
-        await async_session.session.close()
+        await wtsession.close()
     else:
         raise ValueError('Only async supported at present.')
     
