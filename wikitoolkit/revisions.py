@@ -85,6 +85,8 @@ async def parse_revisions(data):
     """
     revisions = {}
     for page in await data:
+        if ('pageid' not in page) | ('title' not in page):
+            continue
         if (page['pageid'], page['title']) in revisions:
             revisions[(page['pageid'], page['title'])].extend(page.get('revisions', []))
         else:
