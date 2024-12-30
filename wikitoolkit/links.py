@@ -74,7 +74,7 @@ async def parse_links(data, prop):
     else:
         return links
 
-async def get_links(wtsession, mode='out', titles=None, pageids=None, pagemaps=None, namespaces=[0], update_maps=False, batchsize=200):
+async def get_links(wtsession, mode='out', titles=None, pageids=None, pagemaps=None, namespaces=[0], update_maps=False, batchsize=200, async_args={}):
     """Get links to/from a list of articles from the API. Runs asynchronously.
 
     Args:
@@ -86,6 +86,7 @@ async def get_links(wtsession, mode='out', titles=None, pageids=None, pagemaps=N
         namespaces (list, optional): The wiki namespaces to collect links from. Defaults to [0].
         update_maps (bool, optional): Whether to update maps on link collection. Defaults to False.
         batchsize (int, optional): How many pages to collect links for at a time - for rate limiting purposes. Defaults to 200.
+        async_args (dict, optional): Arguments for the async query functions. Defaults to {}.
 
     Raises:
         ValueError: If titles and pageids are not specified or if both are specified.
@@ -155,7 +156,7 @@ async def get_links(wtsession, mode='out', titles=None, pageids=None, pagemaps=N
                 # Query the API for the links
                 data = await iterate_async_query(wtsession.mw_session, query_args_list,
                                                 function=parse_links, f_args=[modedict[m]['pval']],
-                                                debug=update_maps&(m in ['out', 'in']))
+                                                debug=update_maps&(m in ['out', 'in']), **async_args)
 
                 # Parse the data for regular out/in-links and update the maps if necessary
                 if m in ['out', 'in']:
@@ -174,7 +175,7 @@ async def get_links(wtsession, mode='out', titles=None, pageids=None, pagemaps=N
             except Exception as v: # TODO: Be more specific here
                 print(v)
                 #split arts in half and try again
-                batchsize = batchsize // 2
+                batchsize = max(batchsize // 2, 1)
                 time.sleep(10)
                 print('%.2f%% complete' % (100*n/size))
                 print('Trying again at n=%d with batchsize=%d' % (n, batchsize))

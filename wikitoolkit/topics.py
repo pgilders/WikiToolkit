@@ -5,7 +5,7 @@ import mwapi
 import aiohttp
 
 
-async def get_articles_topics(wtsession, titles=None, revids=None, pagemaps=None, lang='en', model='outlink-topic-model', tf_args={}):
+async def get_articles_topics(wtsession, titles=None, revids=None, pagemaps=None, lang='en', model='outlink-topic-model', tf_args={}, async_args={}):
     """Get topic scores for articles using the lift wing API.
 
     Args:
@@ -16,6 +16,7 @@ async def get_articles_topics(wtsession, titles=None, revids=None, pagemaps=None
         lang (str, optional): language code. Defaults to 'en'.
         model (str, optional): The model to use for generating topics. Defaults to 'outlink-topic-model'.
         tf_args (dict, optional): Arguments for the topics function. Defaults to {}.
+        async_args (dict, optional): Arguments for the async query functions. Defaults to {}.
 
     Raises:
         ValueError: Exactly one of titles or revids must be provided.
@@ -44,7 +45,8 @@ async def get_articles_topics(wtsession, titles=None, revids=None, pagemaps=None
         
         # Perform the asynchronous query to get topics
         topics = await iterate_async_query(wtsession.lw_session, query_args_list, httpmethod='POST',
-                                           posturl=f'/service/lw/inference/v1/models/{model}:predict')
+                                           posturl=f'/service/lw/inference/v1/models/{model}:predict',
+                                           **async_args)
         
         # Process the results into a dictionary
         topics = {x['prediction']['article'].split('wikipedia.org/wiki/')[1].replace('_', ' '):
@@ -59,7 +61,8 @@ async def get_articles_topics(wtsession, titles=None, revids=None, pagemaps=None
         
         # Perform the asynchronous query to get topics
         topics = await iterate_async_query(wtsession.lw_session, query_args_list, httpmethod='POST',
-                                           posturl=f'/service/lw/inference/v1/models/{model}:predict')
+                                           posturl=f'/service/lw/inference/v1/models/{model}:predict',
+                                           **async_args)
         
         # Process the results into a dictionary
         topics = {int(list(x[model.split('-')[0]]['scores'].keys())[0]):

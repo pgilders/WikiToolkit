@@ -69,7 +69,7 @@ from .revisions import *
 
 #     return revisions
 
-async def get_revisions_quality(wtsession, revids, lang, models='articlequality'):
+async def get_revisions_quality(wtsession, revids, lang, models='articlequality', async_args={}):
     """Get quality scores for revisions.
 
     Args:
@@ -77,6 +77,7 @@ async def get_revisions_quality(wtsession, revids, lang, models='articlequality'
         revids (list): list of revision IDs.
         lang (str): language code.
         models (str|list, optional): The quality model(s) to use. Defaults to 'articlequality'.
+        async_args (dict, optional): Arguments for the async query functions. Defaults to {}.
 
     Raises:
         ValueError: If model not recognized.
@@ -102,7 +103,8 @@ async def get_revisions_quality(wtsession, revids, lang, models='articlequality'
     for model in models:
         # Perform asynchronous query to get quality scores
         quals = await iterate_async_query(wtsession.lw_session, query_args_list, httpmethod='POST',
-                                          posturl=f'/service/lw/inference/v1/models/{model}:predict')
+                                          posturl=f'/service/lw/inference/v1/models/{model}:predict',
+                                          **async_args)
         
         # Parse the quality scores based on the model type
         if model == 'articlequality':

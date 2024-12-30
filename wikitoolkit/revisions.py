@@ -20,7 +20,7 @@ async def parse_revision(data):
 
 async def get_revision(session, titles=None, pageids=None, date=None,
                        pagemaps=None, props=['timestamp', 'ids'],
-                       return_props=None):
+                       return_props=None, async_args={}):
     """Get data for a particular revision of a page.
 
     Args:
@@ -29,8 +29,9 @@ async def get_revision(session, titles=None, pageids=None, date=None,
         pageids (list, optional): Page IDs. Defaults to None.
         date (str): Date to retrieve revision for. Defaults to None.
         pagemaps (wikitools.PageMap, optional): PageMap object to track redirects. Defaults to None.
-        props (list, optional): Revision properties to collect. Defaults to ['timestamp', 'ids', 'content'].
+        props (list, optional): Revision properties to collect. Defaults to ['timestamp', 'ids'].
         return_props (list, optional): Revision properties to return. Defaults to None.
+        async_args (dict, optional): Arguments for the async query functions. Defaults to {}.
 
     Returns:
         dict: Revision data.
@@ -57,7 +58,7 @@ async def get_revision(session, titles=None, pageids=None, date=None,
                 pagemaps=pagemaps, params=params)
 
     # Execute the API query and parse the revision data
-    data = await iterate_async_query(session.mw_session, query_args_list, function=parse_revision, continuation=False)
+    data = await iterate_async_query(session.mw_session, query_args_list, function=parse_revision, continuation=False, **async_args)
     
     # Organize the revision data based on titles or pageids
     if titles:
@@ -95,7 +96,7 @@ async def parse_revisions(data):
     return revisions
 
 async def get_revisions(wtsession, titles=None, pageids=None, start=None, stop=None,
-                  pagemaps=None, props=['timestamp', 'ids']):
+                  pagemaps=None, props=['timestamp', 'ids'], async_args={}):
     """Get revisions for a page between two dates.
 
     Args:
@@ -106,6 +107,7 @@ async def get_revisions(wtsession, titles=None, pageids=None, start=None, stop=N
         stop (str): Stop date. Defaults to None.
         pagemaps (wikitools.PageMap, optional): PageMap object to track redirects. Defaults to None.
         props (list, optional): Revision properties to collect. Defaults to ['timestamp', 'ids'].
+        async_args (dict, optional): Arguments for the async query functions. Defaults to {}.
     
     Returns:
         dict: Revisions data.
@@ -137,7 +139,7 @@ async def get_revisions(wtsession, titles=None, pageids=None, start=None, stop=N
                 pagemaps=pagemaps, params=params)
 
     # Execute the API query and parse the revision data
-    data = await iterate_async_query(wtsession.mw_session, query_args_list, function=parse_revisions, debug=False)
+    data = await iterate_async_query(wtsession.mw_session, query_args_list, function=parse_revisions, debug=False, **async_args)
 
     # Organize the revision data based on titles or pageids
     if titles:
@@ -162,7 +164,7 @@ async def parse_revisions_data(data):
                                     for x in page['revisions']})
     return revisions_data
 
-async def get_revisions_data(wtsession, revids, pagemaps=None, props=['timestamp', 'ids']):
+async def get_revisions_data(wtsession, revids, pagemaps=None, props=['timestamp', 'ids'], async_args={}):
     """Get data on specific revisions.
 
     Args:
@@ -170,6 +172,7 @@ async def get_revisions_data(wtsession, revids, pagemaps=None, props=['timestamp
         revids (list): The revision IDs to collect data for.
         pagemaps (wikitools.PageMap, optional): PageMap object to track redirects. Defaults to None.
         props (list, optional): Revision properties to collect. Defaults to ['timestamp', 'ids'].
+        async_args (dict, optional): Arguments for the async query functions. Defaults to {}.
 
     Returns:
         dict: Revisions data
@@ -186,7 +189,7 @@ async def get_revisions_data(wtsession, revids, pagemaps=None, props=['timestamp
     query_args_list, key, ix = querylister(revids=revids, pagemaps=pagemaps,
                                            params=params)
 
-    data = await iterate_async_query(wtsession.mw_session, query_args_list, function=parse_revisions_data, debug=False)
+    data = await iterate_async_query(wtsession.mw_session, query_args_list, function=parse_revisions_data, debug=False, **async_args)
     revisions_data = {k:v for d in data for k, v in d.items()}
 
     return revisions_data
@@ -206,13 +209,14 @@ async def parse_revisions_content(data):
                                 for x in page['revisions']})
     return revisions_content
 
-async def get_revisions_content(wtsession, revids, pagemaps=None):
+async def get_revisions_content(wtsession, revids, pagemaps=None, async_args={}):
     """Get revision content for a list of revision IDs.
 
     Args:
         wtsession (wikitoolkit.WTSession): The wikitoolkit session manager.
         revids (list): The revision IDs to collect data for.
         pagemaps (wikitools.PageMap, optional): PageMap object to track redirects. Defaults to None.
+        async_args (dict, optional): Arguments for the async query functions. Defaults to {}.
     Returns:
         dict: The content of the revisions.
     """
@@ -231,7 +235,7 @@ async def get_revisions_content(wtsession, revids, pagemaps=None):
                                            params=params)    
 
     # Execute the API query and parse the revisions content
-    data = await iterate_async_query(wtsession.mw_session, query_args_list, function=parse_revisions_content, debug=False)
+    data = await iterate_async_query(wtsession.mw_session, query_args_list, function=parse_revisions_content, debug=False, **async_args)
     
     # Combine the revisions content from different chunks into a single dictionary
     revisions_content = {k:v for d in data for k, v in d.items()}

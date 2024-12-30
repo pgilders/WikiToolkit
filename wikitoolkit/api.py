@@ -1,6 +1,7 @@
 import requests
 import asyncio
 import aiohttp
+from aiohttp import ClientResponseError
 import mwapi
 from mwapi.errors import APIError
 from mwviews.api import PageviewsClient
@@ -56,14 +57,18 @@ def query_continued(session, query_args, debug=False):
     continued = session.get(action='query', continuation=True, **query_args)
     yield from iterate_query(continued, debug)
 
-async def query_async(session, query_args, continuation=True, debug=False, httpmethod='GET', posturl=None):
-    """Create an async query to the MediaWiki API.
+async def query_async(session, query_args, continuation=True, debug=False, httpmethod='GET', posturl=None, max_retries=12, concurrency=100):
+    """Create an async query to the MediaWiki API with semaphore and retry handling.
 
     Args:
         session (wikitoolkit.WTSession.session): The wikitoolkit session.
         query_args (dict): The query arguments.
         continuation (bool, optional): Whether to use continuation. Defaults to True.
         debug (bool, optional): Whether to print debug output. Defaults to False.
+        httpmethod (str, optional): HTTP method to use. Defaults to 'GET'.
+        posturl (str, optional): URL for POST requests. Defaults to None.
+        max_retries (int, optional): Maximum number of retries. Defaults to 5.
+        concurrency (int, optional): Maximum number of concurrent tasks. Defaults to 100.
 
     Raises:
         ValueError: Error returned by API.
@@ -71,47 +76,81 @@ async def query_async(session, query_args, continuation=True, debug=False, httpm
     Returns:
         list: List of pages returned by API.
     """
-    # Perform the initial query
-    if httpmethod == 'GET':
-        continued = await asyncio.create_task(session.get(action='query',
-                                                        continuation=continuation,
-                                                        **query_args))
-    elif httpmethod == 'POST':
-        async with session.post(url=posturl, json=query_args) as response:
-            continued = await response.json()
-        return continued
-    else:
-        raise ValueError("Invalid HTTP method.")
-    
-    # Check if continuation is False
-    if not continuation:
-        if debug:
-            return continued
-        elif 'query' in continued:
-            return continued['query']['pages']
-        else:
-            print("MediaWiki returned empty result batch.")
-            return None
-    
-    pages = []
-    try:
-        # Iterate through the continued query
-        async for portion in continued:
-            if debug:
-                pages.append(portion)
-            elif 'query' in portion:
-                for page in portion['query']['pages']:
-                    pages.append(page)
-            else:
-                print("MediaWiki returned empty result batch.")
-    except APIError as error:
-        raise ValueError("MediaWiki returned an error:", str(error))
-    except ValueError as error:
-        raise ValueError("MediaWiki returned an error:", str(error))
-    
-    return pages
 
-async def iterate_async_query(session, query_args_list, function=None, f_args=[], continuation=True, debug=False, httpmethod='GET', posturl=None):
+
+    retries = 0
+    backoff = 0.1  # Start with a 0.1-second delay
+    semaphore = asyncio.Semaphore(concurrency)  # Limit the number of concurrent tasks
+
+    async with semaphore:  # Limit the number of concurrent tasks
+        while retries < max_retries:
+            try:
+                # Perform the query
+                if httpmethod == 'GET':
+                    continued = await asyncio.create_task(session.get(action='query',
+                                                                      continuation=continuation,
+                                                                      **query_args))
+                elif httpmethod == 'POST':
+                    async with session.post(url=posturl, json=query_args) as response:
+                        if response.status == 429:
+                            raise ClientResponseError(response.request_info, response.history, status=response.status)
+                        continued = await response.json()
+                    return continued
+                else:
+                    raise ValueError("Invalid HTTP method.")
+
+                # Handle continuation
+                if not continuation:
+                    if debug:
+                        return continued
+                    elif 'query' in continued:
+                        return continued['query']['pages']
+                    else:
+                        print("MediaWiki returned empty result batch.")
+                        return None
+
+                pages = []
+                try:
+                    async for portion in continued:
+                        if debug:
+                            pages.append(portion)
+                        elif 'query' in portion:
+                            for page in portion['query']['pages']:
+                                pages.append(page)
+                        else:
+                            print("MediaWiki returned empty result batch.")
+                except APIError as error:
+                    raise ValueError("MediaWiki returned an error:", str(error))
+
+                return pages
+
+            except ValueError as error:
+                await asyncio.sleep(backoff)
+                retries += 1
+                backoff *= 2  # Exponential backoff
+                # raise ValueError("MediaWiki returned an error:", str(error))
+
+            except ClientResponseError as error:
+                if error.status == 429:
+                    # Handle 429 Too Many Requests
+                    retry_after = int(error.headers.get("Retry-After", backoff)) if "Retry-After" in error.headers else backoff
+                    print(error.headers)
+                    print(f"Received 429. Retrying after {retry_after} seconds...")
+                    await asyncio.sleep(retry_after)
+                    retries += 1
+                    backoff *= 2  # Exponential backoff
+                else:
+                    raise  # Re-raise other client errors
+
+            except Exception as e:
+                raise
+                print(f"Unexpected error: {e}")
+                raise
+
+        # Raise an error if max retries exceeded
+        raise ValueError(f"Max retries exceeded for query: {query_args}")
+
+async def iterate_async_query(session, query_args_list, function=None, f_args=[], continuation=True, debug=False, httpmethod='GET', posturl=None, max_retries=10, concurrency=100):
     """Iterate through a list of queries asynchronously.
 
     Args:
@@ -121,16 +160,18 @@ async def iterate_async_query(session, query_args_list, function=None, f_args=[]
         f_args (dict, optional): Arguments for parsing function. Defaults to [].
         continuation (bool, optional): Whether to use continuation. Defaults to True.
         debug (bool, optional): Whether to print debug output. Defaults to False.
+        max_retries (int, optional): Maximum number of retries. Defaults to 5.
+        concurrency (int, optional): Maximum number of concurrent tasks. Defaults to 100.
 
     Returns:
         list: List of results from queries
     """
     # Create a list of tasks to be executed asynchronously
     if function:
-        tasks = [function(query_async(session, query_args, continuation, debug, httpmethod, posturl), *f_args)
+        tasks = [function(query_async(session, query_args, continuation, debug, httpmethod, posturl, max_retries, concurrency), *f_args)
                   for query_args in query_args_list]    
     else:
-        tasks = [query_async(session, query_args, continuation, debug, httpmethod, posturl) for query_args in query_args_list]
+        tasks = [query_async(session, query_args, continuation, debug, httpmethod, posturl, max_retries, concurrency) for query_args in query_args_list]
     
     # Execute the tasks asynchronously and gather the results
     results = await asyncio.gather(*tasks)

@@ -3,7 +3,7 @@ from .api import *
 import pickle
 
 async def basic_info(wtsession, titles=None, pageids=None, revids=None,
-                     pagemaps=None, params={}, function=None, f_args={}, debug=False):
+                     pagemaps=None, params={}, function=None, f_args={}, debug=False, async_args={}):
     """Runs a basic (customisable) API query for Wikipedia article information.
 
     Args:
@@ -16,6 +16,7 @@ async def basic_info(wtsession, titles=None, pageids=None, revids=None,
         function (function, optional): Function to parse API output. Defaults to None.
         f_args (dict, optional): Arguments for parsing function. Defaults to {}.
         debug (bool, optional): Whether to produce debug output. Defaults to False.
+        async_args (dict, optional): Arguments for the async query functions. Defaults to {}.
 
     Returns:
         list: Information from Wikipedia API.
@@ -28,7 +29,7 @@ async def basic_info(wtsession, titles=None, pageids=None, revids=None,
                                            params=params)
 
     # Execute the async query and parse the data
-    data = await iterate_async_query(wtsession.mw_session, query_list, function, f_args=f_args, debug=debug)
+    data = await iterate_async_query(wtsession.mw_session, query_list, function, f_args=f_args, debug=debug, **async_args)
 
     return data
 
@@ -63,7 +64,7 @@ async def parse_redirects(data):
     return redirects, norms, ids
 
 async def fix_redirects(wtsession, titles=None, pageids=None, revids=None,
-                        pagemaps=None):
+                        pagemaps=None, async_args={}):
     """Gets the canonical page name for a list of articles. Updates the redirect map, norm map, and ID map in place.
 
     Args:
@@ -72,6 +73,7 @@ async def fix_redirects(wtsession, titles=None, pageids=None, revids=None,
         pageids (list, optional): article page IDs to find canonical page for. Defaults to None.
         revids (list, optional): article revision IDs to find canonical page for. Defaults to None.
         pagemaps (PageMaps, optional): The PageMaps object to update. Defaults to None.
+        async_args (dict, optional): Arguments for the async query functions. Defaults to {}.
     """
     # Create a new PageMaps object if none was provided
     if pagemaps is None:
@@ -87,7 +89,7 @@ async def fix_redirects(wtsession, titles=None, pageids=None, revids=None,
                                         params={'redirects':''})
 
     # Execute the async query and parse the data
-    data = await iterate_async_query(wtsession.mw_session, query_list, parse_redirects, debug=True)
+    data = await iterate_async_query(wtsession.mw_session, query_list, parse_redirects, debug=True, **async_args)
 
     # Update the redirect map, norm map, and ID map with the extracted data
     await pagemaps.update_maps(wtsession, data)
@@ -122,7 +124,7 @@ async def parse_fetched_redirects(data):
     return f_redirects, ids
 
 async def get_redirects(wtsession, titles=None, pageids=None, revids=None,
-                        pagemaps=None):
+                        pagemaps=None, async_args={}):
     """Gets all redirects for a list of articles. Updates the collected redirects, redirect map, and ID map in place.
 
     Args:
@@ -131,6 +133,7 @@ async def get_redirects(wtsession, titles=None, pageids=None, revids=None,
         pageids (list, optional): article page IDs to find all redirects for. Defaults to None.
         revids (list, optional): article revision IDs to find all redirects for. Defaults to None.
         pagemaps (PageMaps, optional): The PageMaps object to update. Defaults to None.
+        async_args (dict, optional): Arguments for the async query functions. Defaults to {}.
     """
     # Create a new PageMaps object if none was provided
     if pagemaps is None:
@@ -149,7 +152,7 @@ async def get_redirects(wtsession, titles=None, pageids=None, revids=None,
                                         params={'prop':'redirects', 'rdlimit': 'max'})
 
     # Execute the async query and parse the data
-    data = await iterate_async_query(wtsession.mw_session, query_list, parse_fetched_redirects, debug=False)
+    data = await iterate_async_query(wtsession.mw_session, query_list, parse_fetched_redirects, debug=False, **async_args)
 
     # Update the collected redirects, redirect map, and ID map with the extracted data
     pagemaps.update_collected_redirect_maps(data)
@@ -268,7 +271,7 @@ class PageMaps:
         self.collected_pageid_redirects.update({self.id_map[k]: [self.id_map[x] for x in v]
                                           for k, v in f_redirects.items()})
         
-    async def fix_redirects(self, wtsession, titles=None, pageids=None, revids=None):
+    async def fix_redirects(self, wtsession, titles=None, pageids=None, revids=None, async_args={}):
         """Gets the canonical page name for a list of articles. Updates the redirect map, norm map, and ID map in place.
 
         Args:
@@ -276,6 +279,7 @@ class PageMaps:
             titles (list, optional): article titles to find canonical page for. Defaults to None.
             pageids (list, optional): article page IDs to find canonical page for. Defaults to None.
             revids (list, optional): article revision IDs to find canonical page for. Defaults to None.
+            async_args (dict, optional): Arguments for the async query functions. Defaults to {}.
         """
 
         # Filter out already processed titles and page IDs
@@ -296,10 +300,10 @@ class PageMaps:
                                             params={'redirects':''})
 
         # Execute the async query and parse the data
-        data = await iterate_async_query(wtsession.mw_session, query_list, parse_redirects, debug=True)
+        data = await iterate_async_query(wtsession.mw_session, query_list, parse_redirects, debug=True, **async_args)
         await self.update_maps(wtsession, data)
         
-    async def get_redirects(self, wtsession, titles=None, pageids=None, revids=None):
+    async def get_redirects(self, wtsession, titles=None, pageids=None, revids=None, async_args={}):
         """Gets all redirects for a list of articles. Updates the collected redirects, redirect map, and ID map in place.
 
         Args:
@@ -307,7 +311,8 @@ class PageMaps:
             titles (list, optional): article titles to find all redirects for. Defaults to None.
             pageids (list, optional): article page IDs to find all redirects for. Defaults to None.
             revids (list, optional): article revision IDs to find all redirects for. Defaults to None.
-        """
+            async_args (dict, optional): Arguments for the async query functions. Defaults to {}.
+    """
 
         # Filter out already processed titles and page IDs
         if titles:
@@ -329,7 +334,7 @@ class PageMaps:
                                     params={'prop':'redirects', 'rdlimit': 'max'})
 
         # Execute the async query and parse the data
-        data = await iterate_async_query(wtsession.mw_session, query_list, parse_fetched_redirects, debug=False)
+        data = await iterate_async_query(wtsession.mw_session, query_list, parse_fetched_redirects, debug=False, **async_args)
 
         # Update the collected redirects, redirect map, and ID map with the extracted data
         await self.update_collected_redirect_maps(data)
