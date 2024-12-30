@@ -7,3 +7,4 @@ from .revisions import *
 from .quality import *
 from .links import *
 from .topics import *
+from .clickstreams import *

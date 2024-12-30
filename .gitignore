@@ -144,3 +144,4 @@ dmypy.json
 # custom
 example.ipynb
 wikitoolkit/dumps.py
+data

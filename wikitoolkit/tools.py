@@ -1,4 +1,5 @@
 from math import log10, floor
+import requests
 
 def round_sig(x, sig=2):
     """Rounds a number to a given number of significant figures.
@@ -66,3 +67,30 @@ def process_articles(titles=None, pageids=None, pagemaps=None):
     items = list(dict.fromkeys([a for a in items if a]))
 
     return items
+
+
+def download_large_file(url, output_path, chunk_size=1024 * 1024):
+    """
+    Download a large file in chunks and save it to a specified path.
+
+    Args:
+        url (str): URL of the file to download.
+        output_path (str): Path where the file will be saved.
+        chunk_size (int): Size of each chunk in bytes. Default is 1024 bytes (1 KB).
+    """
+    try:
+        with requests.get(url, stream=True) as response:
+            response.raise_for_status()  # Raise an error for bad status codes
+            total_size = int(response.headers.get('content-length', 0))
+            with open(output_path, 'wb') as file:
+                print(f"Starting download: {url}")
+                downloaded = 0
+                for chunk in response.iter_content(chunk_size=chunk_size):
+                    if chunk:  # Filter out keep-alive chunks
+                        file.write(chunk)
+                        downloaded += len(chunk)
+                        # Optional: Print download progress
+                        print(f"\rDownloaded {downloaded}/{total_size} bytes ({(downloaded/total_size)*100:.2f}%)", end="")
+            print("\nDownload completed.")
+    except requests.exceptions.RequestException as e:
+        print(f"An error occurred: {e}")
