@@ -92,7 +92,7 @@ async def query_async(session, query_args, continuation=True, debug=False, httpm
                                                                       **query_args))
                 elif httpmethod == 'POST':
                     async with session.post(url=posturl, json=query_args) as response:
-                        if response.status == 429:
+                        if (response.status == 429)|(response.status == 503):
                             raise ClientResponseError(response.request_info, response.history, status=response.status)
                         continued = await response.json()
                     return continued
@@ -131,14 +131,13 @@ async def query_async(session, query_args, continuation=True, debug=False, httpm
                 # raise ValueError("MediaWiki returned an error:", str(error))
 
             except ClientResponseError as error:
-                if error.status == 429:
+                if (error.status == 429)|(error.status == 503):
                     # Handle 429 Too Many Requests
                     if error.headers:
                         retry_after = int(error.headers.get("Retry-After", backoff)) if "Retry-After" in error.headers else backoff
                     else:
                         retry_after = backoff
-                    print(error)
-                    print(f"Received 429. Retrying after {retry_after} seconds...")
+                    print(f"Received {error.status}. Retrying after {retry_after} seconds...")
                     await asyncio.sleep(retry_after)
                     retries += 1
                     backoff *= 2  # Exponential backoff

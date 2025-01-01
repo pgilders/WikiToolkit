@@ -49,7 +49,6 @@ async def get_articles_topics(wtsession, titles=None, revids=None, pagemaps=None
         topics = await iterate_async_query(wtsession.lw_session, query_args_list, httpmethod='POST',
                                            posturl=f'/service/lw/inference/v1/models/{model}:predict',
                                            **async_args)
-        
         # Process the results into a dictionary
         topics = {x['prediction']['article'].split('wikipedia.org/wiki/')[1].replace('_', ' '):
                   {y['topic']: y['score'] for y in x['prediction']['results']} for x in topics}
