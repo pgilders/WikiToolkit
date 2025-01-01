@@ -1,5 +1,8 @@
 import datetime
 import aiohttp
+import asyncio
+import time
+import pandas as pd
 import mwapi
 from .tools import chunks
 from .api import *
@@ -69,7 +72,132 @@ from .revisions import *
 
 #     return revisions
 
-async def get_revisions_quality(wtsession, revids, lang, models='articlequality', async_args={}):
+def lookup_download_quality(lang, revids):
+    """Gets quality scores from the downloaded CSV file.
+
+    Args:
+        lang (str): language code.
+        revids (list): list of revision IDs.
+
+    Returns:
+        dict: revisions and their quality scores.
+    """
+
+    try:
+        allscores = pd.read_csv(f'data/la_quality/{lang}wiki.csv').set_index('rev_id')['score']
+        return {revid: allscores[revid] for revid in revids if revid in allscores.index}
+    except FileNotFoundError:
+        print('Quality scores not found.')
+        return {revid: None for revid in revids}
+
+def get_revisions_quality_sync(session, revids, lang, models='articlequality',
+                                max_retries=5, backoff_time=1, backoff_factor=2):
+    """Get quality scores for revisions.
+
+    Args:
+        session (requests.session): The requests session.
+        revids (list): list of revision IDs.
+        lang (str): language code.
+        models (str|list, optional): The quality model(s) to use. Defaults to 'articlequality'.
+        max_retries (int, optional): The maximum number of retries. Defaults to 5.
+        backoff_time (int, optional): The initial backoff time. Defaults to 1.
+        backoff_factor (int, optional): The backoff factor. Defaults to 2.
+
+    Raises:
+        ValueError: If model not recognized.
+
+    Returns:
+        dict: revisions and their quality scores.
+    """
+
+    # Ensure revids is a list
+    if type(revids) == int:
+        revids = [revids]
+
+    # Ensure models is a list
+    if type(models) == str:
+        models = [models]
+    
+    # Initialize a dictionary to store revisions
+    revisions = {int(x): {} for x in revids}
+    
+    # Iterate over each model to get quality scores
+    for model in models:
+        murl = 'https://api.wikimedia.org' + f'/service/lw/inference/v1/models/{model}:predict'         
+        remaining_retries = max_retries
+        backoff = backoff_time  # Initial backoff time
+        mquals = {}
+
+        if model == 'articlequality':
+            lquals = lookup_download_quality(lang, revids)
+            mquals.update(lquals)
+            remaining_revids = [x for x in revids if x not in lquals]
+        else:
+            remaining_revids = revids
+
+        while remaining_retries > 0 and remaining_revids:
+            # print(f"Querying {len(remaining_revids)} revisions with model {model}, attempt {max_retries - remaining_retries + 1}")
+            # Perform synchronous query to get quality scores
+
+            # Create a list of query arguments for each revision ID
+            query_args_list = [{"rev_id": x, "lang": lang} for x in remaining_revids]
+
+            quals = [session.post(murl, json=query_args).json()
+                    for query_args in query_args_list]
+            # print(quals)
+
+            # Update the list of revision IDs that failed for out of scope errors
+            failed_other = [int(qual['error'].split('revid ')[1].split()[0])
+                            for qual in quals if 'error' in qual]
+
+            # Parse the quality scores based on the model type
+            if model == 'articlequality':
+                quals = {int(qual['revision_id']): qual['score'] for qual in quals
+                        if 'revision_id' in qual}
+            elif model.split('-')[0] == 'revertrisk':
+                quals = {int(qual['revision_id']): qual['output']['probabilities']['true']
+                        for qual in quals if 'revision_id' in qual}
+            elif model[2:6] == 'wiki':
+                if model.split('-')[1] in ['articlequality', 'draftquality']:
+                    quals = {int(k): v[model.split('-')[1]]['score']['probability']
+                            for x in quals for k, v in x['enwiki']['scores'].items()}
+                else:
+                    quals = {int(k): v[model.split('-')[1]]['score']['probability']['true']
+                            for x in quals if model[:6] in x for k, v in x[model[:6]]['scores'].items()}
+            else:
+                raise ValueError("Model not recognized")
+            
+            # Update the quality scores dictionary
+            mquals.update(quals)
+            
+            # Retry failed revisions
+            remaining_revids = [x for x in remaining_revids
+                                if (x not in quals)&(x not in failed_other)]
+            if remaining_revids:
+                # print(f"{len(remaining_revids)} revisions failed with 504. Retrying in {backoff} seconds...")
+                time.sleep(backoff)
+                backoff *= backoff_factor  # Exponential backoff
+                remaining_retries -= 1
+            else:
+                break  # Exit loop if no failures
+        
+        if len(remaining_revids) > 0:
+            # print(f"Failed to get quality scores for {len(remaining_revids)} revisions after {max_retries} attempts")
+            rquals = {x: None for x in remaining_revids}
+            mquals.update(rquals)
+            
+        # Update the revisions dictionary with the quality scores
+        for k, v in revisions.items():
+            if k in mquals:
+                v[model] = mquals[k]
+
+    return revisions
+
+
+
+
+async def get_revisions_quality(wtsession, revids, lang, models='articlequality',
+                                max_retries=5, backoff_time=1, backoff_factor=2, async_args={}):
     """Get quality scores for revisions.
 
     Args:
@@ -85,6 +213,8 @@ async def get_revisions_quality(wtsession, revids, lang, models='articlequality'
     Returns:
         dict: revisions and their quality scores.
     """
+    print('WARNING: This async function does not work well with Wikipedia\'s lift wing API. Use the synchronous function instead.')
+
     # Ensure revids is a list
     if type(revids) == int:
         revids = [revids]
@@ -92,41 +222,72 @@ async def get_revisions_quality(wtsession, revids, lang, models='articlequality'
     # Ensure models is a list
     if type(models) == str:
         models = [models]
-
-    # Create a list of query arguments for each revision ID
-    query_args_list = [{"rev_id": x, "lang": lang} for x in revids]
     
     # Initialize a dictionary to store revisions
     revisions = {int(x): {} for x in revids}
     
     # Iterate over each model to get quality scores
-    for model in models:
-        # Perform asynchronous query to get quality scores
-        quals = await iterate_async_query(wtsession.lw_session, query_args_list, httpmethod='POST',
-                                          posturl=f'/service/lw/inference/v1/models/{model}:predict',
-                                          **async_args)
-        
-        # Parse the quality scores based on the model type
-        if model == 'articlequality':
-            quals = {int(qual['revision_id']): qual['score'] for qual in quals
-                     if 'revision_id' in qual}
-        elif model.split('-')[0] == 'revertrisk':
-            quals = {int(qual['revision_id']): qual['output']['probabilities']['true']
-                     for qual in quals if 'revision_id' in qual}
-        elif model[2:6] == 'wiki':
-            if model.split('-')[1] in ['articlequality', 'draftquality']:
-                quals = {int(k): v[model.split('-')[1]]['score']['probability']
-                         for x in quals for k, v in x['enwiki']['scores'].items()}
+    for model in models:         
+        remaining_revids = revids
+        remaining_retries = max_retries
+        backoff = backoff_time  # Initial backoff time
+        mquals = {}
+
+        while remaining_retries > 0 and remaining_revids:
+            print(f"Querying {len(remaining_revids)} revisions with model {model}, attempt {max_retries - remaining_retries + 1}")
+            # Perform asynchronous query to get quality scores
+
+            # Create a list of query arguments for each revision ID
+            query_args_list = [{"rev_id": x, "lang": lang} for x in remaining_revids]
+
+            quals = await iterate_async_query(wtsession.lw_session, query_args_list, httpmethod='POST',
+                                            posturl=f'/service/lw/inference/v1/models/{model}:predict',
+                                            **async_args)
+
+            # Update the list of revision IDs that failed for out of scope errors
+            failed_other = [int(qual['error'].split('revid ')[1].split()[0])
+                            for qual in quals if 'error' in qual]
+
+            # Parse the quality scores based on the model type
+            if model == 'articlequality':
+                quals = {int(qual['revision_id']): qual['score'] for qual in quals
+                        if 'revision_id' in qual}
+            elif model.split('-')[0] == 'revertrisk':
+                quals = {int(qual['revision_id']): qual['output']['probabilities']['true']
+                        for qual in quals if 'revision_id' in qual}
+            elif model[2:6] == 'wiki':
+                if model.split('-')[1] in ['articlequality', 'draftquality']:
+                    quals = {int(k): v[model.split('-')[1]]['score']['probability']
+                            for x in quals for k, v in x['enwiki']['scores'].items()}
+                else:
+                    quals = {int(k): v[model.split('-')[1]]['score']['probability']['true']
+                            for x in quals if model[:6] in x for k, v in x[model[:6]]['scores'].items()}
             else:
-                quals = {int(k): v[model.split('-')[1]]['score']['probability']['true']
-                         for x in quals if model[:6] in x for k, v in x[model[:6]]['scores'].items()}
-        else:
-            raise ValueError("Model not recognized")
+                raise ValueError("Model not recognized")
+            
+            # Update the quality scores dictionary
+            mquals.update(quals)
+            
+            # Retry failed revisions
+            remaining_revids = [x for x in remaining_revids
+                                if (x not in quals)&(x not in failed_other)]
+            if remaining_revids:
+                print(f"{len(remaining_revids)} revisions failed with 504. Retrying in {backoff} seconds...")
+                await asyncio.sleep(backoff)
+                backoff *= backoff_factor  # Exponential backoff
+                remaining_retries -= 1
+            else:
+                break  # Exit loop if no failures
         
+        if len(remaining_revids) > 0:
+            print(f"Failed to get quality scores for {len(remaining_revids)} revisions after {max_retries} attempts")
+            rquals = {x: None for x in remaining_revids}
+            mquals.update(rquals)
+            
         # Update the revisions dictionary with the quality scores
         for k, v in revisions.items():
-            if k in quals:
-                v[model] = quals[k]
+            if k in mquals:
+                v[model] = mquals[k]
 
     return revisions
 
@@ -151,6 +312,9 @@ async def get_articles_quality(wtsession, titles=None, pageids=None, lang=None, 
     Returns:
         dict: Articles and their quality scores.
     """
+
+    print('WARNING: This async function does not work well with Wikipedia\'s lift wing API. Use the synchronous function instead.')
+
     # Check if a specific date is provided or if start and stop dates are not provided
     if date or not (start or stop):
         # Get the latest revision for the given titles or page IDs at the specified date
@@ -213,6 +377,7 @@ async def pipeline_quality(project, user_agent, titles=None, pageids=None,
     Returns:
         dict: A dictionary of quality scores, and optionally the pagemaps object.
     """
+    print('WARNING: This async function does not work well with Wikipedia\'s lift wing API. Use the synchronous function instead.')
 
     if pagemaps is None:
         return_pm = True
