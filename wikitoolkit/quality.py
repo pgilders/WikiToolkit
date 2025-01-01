@@ -84,11 +84,11 @@ def lookup_download_quality(lang, revids):
     """
 
     try:
-        allscores = pd.read_csv(f'data/la_quality/{lang}wiki.csv').set_index('rev_id')['score']
-        return {revid: allscores[revid] for revid in revids if revid in allscores.index}
+        allscores = pd.read_csv(f'data/la_quality/{lang}wiki.csv').set_index('revision_id')['pred_qual']
+        return allscores.loc[[x for x in revids if x in allscores.index]].to_dict()
     except FileNotFoundError:
         print('Quality scores not found.')
-        return {revid: None for revid in revids}
+        return {}
 
 def get_revisions_quality_sync(session, revids, lang, models='articlequality',
                                 max_retries=5, backoff_time=1, backoff_factor=2):
@@ -132,6 +132,7 @@ def get_revisions_quality_sync(session, revids, lang, models='articlequality',
             lquals = lookup_download_quality(lang, revids)
             mquals.update(lquals)
             remaining_revids = [x for x in revids if x not in lquals]
+            print(f'Found {len(lquals)} quality scores in the downloaded CSV file. {len(remaining_revids)} remaining.')
         else:
             remaining_revids = revids
 
