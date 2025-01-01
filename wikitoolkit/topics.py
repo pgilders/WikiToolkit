@@ -41,6 +41,8 @@ async def get_articles_topics(wtsession, titles=None, revids=None, pagemaps=None
         
         # Prepare the query arguments for each title
         titles = process_articles(titles=titles, pagemaps=pagemaps)
+        if 'threshold' in tf_args:
+            tf_args['threshold'] = float(tf_args['threshold']) # Ensure that the threshold is a float - weird bug at 0 otherwise
         query_args_list = [{"page_title": x, "lang": lang, **tf_args} for x in titles]
         
         # Perform the asynchronous query to get topics

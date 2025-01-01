@@ -133,8 +133,11 @@ async def query_async(session, query_args, continuation=True, debug=False, httpm
             except ClientResponseError as error:
                 if error.status == 429:
                     # Handle 429 Too Many Requests
-                    retry_after = int(error.headers.get("Retry-After", backoff)) if "Retry-After" in error.headers else backoff
-                    print(error.headers)
+                    if error.headers:
+                        retry_after = int(error.headers.get("Retry-After", backoff)) if "Retry-After" in error.headers else backoff
+                    else:
+                        retry_after = backoff
+                    print(error)
                     print(f"Received 429. Retrying after {retry_after} seconds...")
                     await asyncio.sleep(retry_after)
                     retries += 1
