@@ -137,7 +137,7 @@ async def query_async(session, query_args, continuation=True, debug=False, httpm
                         retry_after = int(error.headers.get("Retry-After", backoff)) if "Retry-After" in error.headers else backoff
                     else:
                         retry_after = backoff
-                    print(f"Received {error.status}. Retrying after {retry_after} seconds...")
+                    # print(f"Received {error.status}. Retrying after {retry_after} seconds...")
                     await asyncio.sleep(retry_after)
                     retries += 1
                     backoff *= 2  # Exponential backoff
@@ -337,6 +337,7 @@ class WTSession:
         mw_session_args (dict, optional): mwapi session arguments. Defaults to {'formatversion':2}.
         lw_session_args (dict, optional): aiohttp session arguments. Defaults to {}.
         pv_client_args (dict, optional): PageviewsClient arguments. Defaults to {}.
+        r_session_args (dict, optional): requests session arguments. Defaults to {}.
     """
     def __init__(self, project, user_agent, headers={},
                  mw_session_args={'formatversion':2},
@@ -348,6 +349,9 @@ class WTSession:
         self.lw_session = aiohttp.ClientSession('https://api.wikimedia.org',
                                                 headers=headers.update({'user-agent': user_agent}),
                                                 **lw_session_args)
+        self.r_session = requests.Session()
+        self.r_session.headers.update({'user-agent': user_agent})
+        self.r_session.headers.update(headers)
 
     async def close(self):
         """Close the session objects."""

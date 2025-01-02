@@ -90,12 +90,12 @@ def lookup_download_quality(lang, revids):
         print('Quality scores not found.')
         return {}
 
-def get_revisions_quality_sync(session, revids, lang, models='articlequality',
+def get_revisions_quality_sync(wtsession, revids, lang, models='articlequality',
                                 max_retries=5, backoff_time=1, backoff_factor=2):
     """Get quality scores for revisions.
 
     Args:
-        session (requests.session): The requests session.
+        wtsession (wikitoolkit.WTSession): The wikitoolkit session manager.
         revids (list): list of revision IDs.
         lang (str): language code.
         models (str|list, optional): The quality model(s) to use. Defaults to 'articlequality'.
@@ -143,7 +143,7 @@ def get_revisions_quality_sync(session, revids, lang, models='articlequality',
             # Create a list of query arguments for each revision ID
             query_args_list = [{"rev_id": x, "lang": lang} for x in remaining_revids]
 
-            quals = [session.post(murl, json=query_args).json()
+            quals = [wtsession.r_session.post(murl, json=query_args).json()
                     for query_args in query_args_list]
             # print(quals)
 
