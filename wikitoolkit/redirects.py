@@ -161,12 +161,26 @@ async def get_redirects(wtsession, titles=None, pageids=None, revids=None,
     if rp:
         return pagemaps
 
+async def parse_wikidata(data):
+    """Parses Wikidata IDs from the Wikipedia API.
+
+    Args:
+        data (list): Data from the Wikipedia API.
+
+    Returns:
+        dict: Titles to Wikidata IDs.
+    """
+    wikidata_ids = {v['title']: v['pageprops'].get('wikibase_item', None) if 'pageprops' in v else None
+                             for v in await data}
+    return wikidata_ids
+
 class PageMaps:
     """A class for fixing, collecting, and managing redirect and ID data.
     """
     def __init__(self, titles_redirect_map=None, pageids_redirect_map=None,
-                 norm_map=None, id_map=None, revid_map=None, collected_title_redirects=None,
-                 collected_pageid_redirects=None):
+                 norm_map=None, id_map=None, revid_map=None, wikidata_id_map=None,
+                 collected_title_redirects=None,
+                 collected_pageid_redirects=None, wikidata_map=None):
         """Initialise the PageMaps object.
 
         Args:
@@ -175,6 +189,7 @@ class PageMaps:
             norm_map (dict, optional): A dictionary of non-normalised to normalised titles. Defaults to None.
             id_map (dict, optional): A dictionary of titles to page IDs. Defaults to None.
             revid_map (dict, optional): A dictionary of revision IDs to their canonical page IDs. Defaults to None.
+            wikidata_id_map (dict, optional): A dictionary of titles to Wikidata IDs. Defaults to None.
             collected_title_redirects (dict, optional): A dictionary of canonical titles to all their redirects. Defaults to None.
             collected_pageid_redirects (dict, optional): A dictionary of canonical page IDs to all their redirect page IDs. Defaults to None.
         """
@@ -183,6 +198,7 @@ class PageMaps:
         self.norm_map = norm_map if norm_map is not None else {}
         self.id_map = id_map if id_map is not None else {}
         self.revid_map = revid_map if revid_map is not None else {} # not really used
+        self.wikidata_id_map = wikidata_id_map if wikidata_id_map is not None else {}
         self.collected_title_redirects = collected_title_redirects if collected_title_redirects is not None else {}
         self.collected_pageid_redirects = collected_pageid_redirects if collected_pageid_redirects is not None else {}
 
@@ -270,6 +286,15 @@ class PageMaps:
         self.collected_title_redirects.update(f_redirects)
         self.collected_pageid_redirects.update({self.id_map[k]: [self.id_map[x] for x in v]
                                           for k, v in f_redirects.items()})
+    
+    async def update_wikidata_id_map(self, data):
+        """Updates the Wikidata map with the extracted API data.
+
+        Args:
+            data (list): Data from the Wikipedia API.
+        """
+        wikidata_ids = {key: val for d in data for key, val in d.items()}
+        self.wikidata_id_map.update(wikidata_ids)
         
     async def fix_redirects(self, wtsession, titles=None, pageids=None, revids=None, async_args={}):
         """Gets the canonical page name for a list of articles. Updates the redirect map, norm map, and ID map in place.
@@ -312,13 +337,13 @@ class PageMaps:
             pageids (list, optional): article page IDs to find all redirects for. Defaults to None.
             revids (list, optional): article revision IDs to find all redirects for. Defaults to None.
             async_args (dict, optional): Arguments for the async query functions. Defaults to {}.
-    """
+        """
 
         # Filter out already processed titles and page IDs
         if titles:
             collected = self.collected_title_redirects
         elif pageids:
-            collected = self.collected_pageid_redirects.values()
+            collected = self.collected_pageid_redirects
         titles, pageids, revids = self.filter_input(collected, titles=titles,
                                                     pageids=pageids, revids=revids)
         # If no new titles or page IDs are left, finish
@@ -339,6 +364,41 @@ class PageMaps:
         # Update the collected redirects, redirect map, and ID map with the extracted data
         await self.update_collected_redirect_maps(data)
 
+    async def get_wikidata_ids(self, wtsession, titles=None, pageids=None, revids=None, async_args={}):
+        """Gets the Wikidata item for a list of articles. Updates the Wikidata map in place.
+
+        Args:
+            wtsession (wikitoolkit.WTSession): The wikitoolkit session manager.
+            titles (list, optional): article titles to find Wikidata item for. Defaults to None.
+            pageids (list, optional): article page IDs to find Wikidata item for. Defaults to None.
+            revids (list, optional): article revision IDs to find Wikidata item for. Defaults to None.
+            async_args (dict, optional): Arguments for the async query functions. Defaults to {}.
+        """
+        # Filter out already processed titles and page IDs
+        if titles:
+            collected = self.wikidata_id_map
+        elif pageids:
+            raise ValueError('Page IDs not yet supported in this method') # TODO: not yet supported
+        titles, pageids, revids = self.filter_input(collected, titles=titles,
+                                                    pageids=pageids, revids=revids)
+        # If no new titles or page IDs are left, finish
+        if not any([titles, pageids, revids]):
+            return
+        
+        # TODO: handle revisions
+        await self.fix_redirects(wtsession, titles=titles, pageids=pageids, revids=revids)
+
+        # Construct the query list
+        query_list, key, ix = querylister(titles=titles, pageids=pageids,
+                                            revids=revids, generator=False,
+                                            pagemaps=self,
+                                            params={'prop':'pageprops', 'ppprop':'wikibase_item'})
+
+        # Execute the async query and parse the data
+        data = await iterate_async_query(wtsession.mw_session, query_list, parse_wikidata, debug=False, **async_args)
+        # Update the Wikidata map with the extracted data
+        await self.update_wikidata_id_map(data)
+
     def return_maps(self):
         """Return the page maps.
 
@@ -349,6 +409,7 @@ class PageMaps:
         return {'titles_redirect_map': self.titles_redirect_map,
                 'pageids_redirect_map': self.pageids_redirect_map,
                 'norm_map': self.norm_map, 'id_map': self.id_map,
+                'wikidata_id_map': self.wikidata_id_map,
                 'collected_title_redirects': self.collected_title_redirects,
                 'collected_pageid_redirects': self.collected_pageid_redirects}
 
