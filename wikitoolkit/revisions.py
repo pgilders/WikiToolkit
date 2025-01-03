@@ -15,6 +15,8 @@ async def parse_revision(data):
     """
     rev_info = {}
     for page in await data:
+        if ('pageid' not in page) | ('title' not in page):
+            continue
         rev_info[(page['pageid'], page['title'])] = page.get('revisions', [None])[0]
     return rev_info
 
