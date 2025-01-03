@@ -1,11 +1,10 @@
 from .tools import *
 from .redirects import *
-import mwapi
-from mwviews.api import PageviewsClient
+from .api import *
 from mwviews import *
 
 
-def api_article_views(wtsession, project, articles, redirects=True, pagemaps=None,
+async def api_article_views(wtsession, project, articles, redirects=True, pagemaps=None,
                       access='all-access', agent='all-agents', granularity='daily',
                       start=None, end=None, replace_nones=True, process=True):
     """Get pageviews for articles from the mwviews API.
@@ -45,7 +44,7 @@ def api_article_views(wtsession, project, articles, redirects=True, pagemaps=Non
         articles = [y for x in articles for y in x]
 
     # Get the article views using the mwviews client
-    rdpv = wtsession.pv_client.article_views(project, articles, access, agent, granularity,
+    rdpv = await wtsession.apv_client.article_views(project, articles, access, agent, granularity,
                                 start, end)
 
     # If redirects are requested, group the pageviews by redirects
@@ -112,14 +111,13 @@ async def pipeline_api_article_views(project, user_agent, articles, pagemaps=Non
     # Create the session and client objects based on the asynchronous flag
     if asynchronous:
         wtsession = WTSession(project, user_agent, mw_session_args=session_args,
-                            pv_client_args=client_args)
+                            apv_client_args=client_args)
     else:
         raise ValueError('Only async supported at present.')
 
     # If asynchronous, fix redirects and get existing redirects
     if asynchronous:
         await pagemaps.get_redirects(wtsession, articles)
-        await wtsession.close()
     else:
         raise ValueError('Only async supported at present.')
     
@@ -127,9 +125,9 @@ async def pipeline_api_article_views(project, user_agent, articles, pagemaps=Non
     articles = process_articles(articles, pagemaps=pagemaps)
     articles = [y for x in articles for y in pagemaps.collected_title_redirects[x]]
     
-    # Call the api_article_views function to get the pageviews
-    pageviews = api_article_views(wtsession, project, articles, pagemaps=pagemaps,
+    pageviews = await api_article_views(wtsession, project, articles, pagemaps=pagemaps,
                                   process=False, **aav_args)
+    await wtsession.close()
     if rp:
         return pageviews, pagemaps
     else:

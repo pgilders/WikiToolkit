@@ -6,6 +6,12 @@ import mwapi
 from mwapi.errors import APIError
 from mwviews.api import PageviewsClient
 from .tools import *
+from collections import defaultdict
+from urllib.parse import quote
+from datetime import date, timedelta
+import traceback
+from mwviews.api.pageviews import parse_date, format_date, timestamps_between, month_from_day
+
 
 def query(session, query_args):
     """Run a query to the MediaWiki API.
@@ -327,6 +333,141 @@ def querylister(titles=None, pageids=None, revids=None, generator=False,
     
     return query_args_list, key, ix
 
+
+
+class AsyncPageviewsClient:
+    """An asynchronous client for the Wikimedia Pageviews API.
+    """
+
+    def __init__(self, user_agent, max_retries=12, concurrency=100):
+        """Initialize the AsyncPageviewsClient with a semaphore.
+        
+        Args:
+            user_agent (str): The user agent for the requests.
+            max_retries (int, optional): The number of retries for failed requests. Defaults to 12.
+            concurrency (int, optional): The number of concurrent requests. Defaults to
+                100.
+
+        Returns:
+            AsyncPageviewsClient: The initialized client.
+        
+        """
+        self.session = aiohttp.ClientSession(base_url='https://wikimedia.org/',
+                                             headers={'User-Agent': user_agent})
+        self.semaphore = asyncio.Semaphore(concurrency)
+        self.max_retries = max_retries
+
+    async def async_get(self, url):
+        """Make an asynchronous GET request to the provided URL.
+
+        Args:
+            url (str): The URL to make the request to.
+
+        Raises:
+            Exception: If the request fails after the maximum number of retries.
+
+        Returns:
+            dict: The JSON response from the request.
+        """
+        for attempt in range(self.max_retries):
+            async with self.semaphore:
+                async with self.session.get(url) as response:
+                    if response.status == 200:
+                        return await response.json()
+                    elif response.status == 404:
+                        return None
+                    else:
+                        if attempt < self.max_retries - 1:  # Don't retry on the last attempt
+                            await asyncio.sleep(0.1 * (2 ** attempt))
+                        else:
+                            error_message = (
+                                f"Failed to fetch {url} after {self.max_retries} attempts, "
+                                f"status code: {response.status}, response: {await response.text()}"
+                            )
+                            raise Exception(error_message)
+
+    async def async_iterate(self, urls):
+        """Iterate over a list of URLs asynchronously.
+
+        Args:
+            urls (list): The list of URLs to iterate over.
+
+        Returns:
+            list: The list of JSON responses from the requests.
+        """
+        tasks = [self.async_get(url) for url in urls]
+        return await asyncio.gather(*tasks)
+
+    async def article_views(self, project, articles, access='all-access', agent='all-agents',
+                            granularity='daily', start=None, end=None):
+        """Get pageviews for articles from the mwviews API asynchronously.
+
+        Args:
+            project (str): The wiki project.
+            articles (list): List of article titles to get pageviews for.
+            access (str, optional): access method (desktop, mobile-web, mobile-app, all-access). Defaults to 'all-access'.
+            agent (str, optional): user agent type (spider, user, bot, all-agents). Defaults to 'all-agents'.
+            granularity (str, optional): daily or monthly counts. Defaults to 'daily'.
+            start (str|date, optional): The start date to get pageviews from. Defaults to None.
+            end (str|date, optional): The end date to get pageviews to. Defaults to None.
+
+        Returns:
+            dict: Pageviews for articles.
+        """
+
+        endDate = end or date.today()
+        if type(endDate) is not date:
+            endDate = parse_date(end)
+
+        startDate = start or endDate - timedelta(30)
+        if type(startDate) is not date:
+            startDate = parse_date(start)
+
+        # If the user passes in a string as "articles", convert to a list
+        if type(articles) is str:
+            articles = [articles]
+
+        articles = [a.replace(' ', '_') for a in articles]
+        articlesSafe = [quote(a, safe='') for a in articles]
+
+        ep = '/api/rest_v1/metrics/pageviews/per-article'
+        urls = [
+            '/'.join([ep, project, access, agent, a, granularity,
+                format_date(startDate), format_date(endDate),
+            ])
+            for a in articlesSafe
+        ]
+
+        outputDays = timestamps_between(startDate, endDate, timedelta(days=1))
+        if granularity == 'monthly':
+            outputDays = list(set([month_from_day(day) for day in outputDays]))
+        output = defaultdict(dict, {
+            day: {a: None for a in articles} for day in outputDays
+        })
+
+        try:
+            results = await self.async_iterate(urls)
+            some_data_returned = False
+            for result in results:
+                if result:
+                    if 'items' in result:
+                        some_data_returned = True
+                    else:
+                        continue
+                    for item in result['items']:
+                        output[parse_date(item['timestamp'])][item['article']] = item['views']
+
+            if not some_data_returned:
+                raise Exception(
+                    'The pageview API returned nothing useful at: {}'.format(urls)
+                )
+            return output
+        except:
+            print('ERROR while fetching and parsing ' + str(urls))
+            traceback.print_exc()
+            raise
+
+
 class WTSession:
     """Session manager for querying the MediaWiki APIs.
 
@@ -341,11 +482,12 @@ class WTSession:
     """
     def __init__(self, project, user_agent, headers={},
                  mw_session_args={'formatversion':2},
-                 lw_session_args={}, pv_client_args={}):
+                 lw_session_args={}, pv_client_args={}, apv_client_args={}):
         mw_url = f'https://{project}.org'
         self.user_agent = user_agent
         self.mw_session = mwapi.AsyncSession(mw_url, user_agent=user_agent, **mw_session_args)
         self.pv_client = PageviewsClient(user_agent=user_agent, **pv_client_args)
+        self.apv_client = AsyncPageviewsClient(user_agent=user_agent, **apv_client_args)
         self.lw_session = aiohttp.ClientSession('https://api.wikimedia.org',
                                                 headers=headers.update({'user-agent': user_agent}),
                                                 **lw_session_args)
