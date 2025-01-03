@@ -38,8 +38,12 @@ def api_article_views(wtsession, project, articles, redirects=True, pagemaps=Non
 
     # Process the articles using the provided norm_map and redirect_map
     if process:
-        articles = process_articles(articles, pagemaps=pagemaps)
+        articles = process_articles(titles=articles, pagemaps=pagemaps)
     
+    if redirects:
+        articles = [pagemaps.collected_title_redirects.get(a, [a]) for a in articles]
+        articles = [y for x in articles for y in x]
+
     # Get the article views using the mwviews client
     rdpv = wtsession.pv_client.article_views(project, articles, access, agent, granularity,
                                 start, end)
